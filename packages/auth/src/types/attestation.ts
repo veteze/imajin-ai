@@ -122,6 +122,15 @@ export const ATTESTATION_TYPES = [
   // in the attestation payload.
   'recovery.codes.generated',
   'recovery.redeemed',
+
+  // Ingestion attestations (#1750/#2021) — minted by a corpus service's own
+  // service DID (never the platform node identity) each time it ingests a
+  // batch of ThreadDocuments, then forwarded to the kernel's durable
+  // auth.attestations as the cross-service record. See
+  // apps/corpus/src/engine/attestation.ts for the payload shape
+  // (source/corpusDid/ingesterDid/contentHash/threadCount/timestamp) and
+  // spikes/corpus-identity/README.md's "Ingestion attestation schema" section.
+  'corpus.ingested',
 ] as const;
 
 export type AttestationType = typeof ATTESTATION_TYPES[number];
@@ -157,6 +166,10 @@ export const MECHANICAL_ATTESTATION_TYPES = [
   // #1250 Phase 1 — see ATTESTATION_TYPES above.
   'recovery.codes.generated',
   'recovery.redeemed',
+  // #1750/#2021 — minted mechanically by a corpus service's own key on
+  // every ingestion batch, never a bilateral/human-signed claim. See
+  // ATTESTATION_TYPES above.
+  'corpus.ingested',
 ] as const;
 
 /**

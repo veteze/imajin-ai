@@ -231,6 +231,10 @@ module.exports = {
       // apps/kernel/src/lib/mcp/tools/corpus.ts). dev-jin and prod-jin run on
       // the same host, so dev-corpus can't reuse this port — see
       // ecosystem.dev.config.js's dev-corpus comment (#1748, #1741, #1726).
+      //
+      // Secrets (#1750, apps/corpus/.env.example): CORPUS_DID,
+      // CORPUS_DID_PRIVATE_KEY, AUTH_SERVICE_URL, ATTESTATION_INTERNAL_API_KEY.
+      // Not listed in this file's "env" block — see dev-corpus's comment above.
       "name": "prod-corpus",
       "cwd": "/home/jin/prod/imajin-ai/apps/corpus",
       "script": "npm",

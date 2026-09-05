@@ -139,6 +139,13 @@ export interface CorpusSearchHit {
   updated: string;
   /** Content hash of the snapshot version matched, present only for `ref`-pinned queries. */
   contentHash?: string;
+  /**
+   * Ingestion attestation that wrote/last-touched this thread (#1750), a
+   * plain stored column on the same `SELECT` `search()` already runs — no
+   * join, no added latency. Undefined for rows ingested before the corpus
+   * service had a signing identity configured.
+   */
+  attestationId?: string;
 }
 
 export interface CorpusSourceFreshness {
@@ -164,7 +171,44 @@ export interface CorpusSearchResult {
   provenance?: CorpusSearchProvenance;
 }
 
+/** Ingestion-attestation counters (#1750) surfaced on `GET /corpus/:did/status`. */
+export interface CorpusAttestationStats {
+  total: number;
+  pendingForward: number;
+}
+
 export interface CorpusStatus {
   sources: CorpusSourceFreshness[];
   threadCount: number;
+  attestations: CorpusAttestationStats;
+}
+
+/**
+ * A corpus-signed ingestion attestation (#1750): the corpus service's own,
+ * low-latency record that it ingested `threadCount` documents for `source`
+ * at `timestamp`, signed with its own service DID key (never the kernel's).
+ * Forwarded (fire-and-forget) to the kernel's durable `auth.attestations`
+ * as the cross-service record — see `apps/corpus/src/lib/attestation-forwarder.ts`.
+ */
+export interface IngestionAttestation {
+  /** Corpus-local id (e.g. "ing_xxx"), distinct from the kernel's auth.attestations.id. */
+  id: string;
+  /** e.g. "github:ima-jin/imajin-ai" */
+  source: string;
+  /**
+   * The corpus DID this ingestion targets. Today this is the `:did` route
+   * param (the existing partition key — see `CorpusStore.databaseForDid`),
+   * pending #1749's `resolveCorpusDid(source)` landing separately.
+   */
+  corpusDid: string;
+  /** DID from the CorpusAccessClaim that authorized this ingest. */
+  ingesterDid: string;
+  /** sha256 over the sorted (docId, updated) pairs of the ingested batch. */
+  contentHash: string;
+  /** Documents written in this batch (for this source). */
+  threadCount: number;
+  /** ISO 8601. */
+  timestamp: string;
+  /** Ed25519 hex — corpus DID signs canonicalize({source, corpusDid, ingesterDid, contentHash, threadCount, timestamp}). */
+  signature: string;
 }

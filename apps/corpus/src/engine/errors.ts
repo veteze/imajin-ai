@@ -20,3 +20,19 @@ export class UnknownRefError extends Error {
     this.name = 'UnknownRefError';
   }
 }
+
+/**
+ * Thrown by `CorpusEngine.getAttestation` when `id` has no matching row in
+ * `did`'s corpus database — including when `id` exists under a *different*
+ * DID's database, since each DID's ingestion attestations live in its own
+ * SQLite file (#1750). Mapped to an HTTP 404 by `routes.ts`.
+ */
+export class AttestationNotFoundError extends Error {
+  constructor(
+    public readonly did: string,
+    public readonly attestationId: string,
+  ) {
+    super(`No ingestion attestation "${attestationId}" found for did "${did}".`);
+    this.name = 'AttestationNotFoundError';
+  }
+}

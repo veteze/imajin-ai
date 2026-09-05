@@ -24,7 +24,7 @@ export type CorpusAccessScope = 'corpus:read' | 'corpus:write';
 const SUPPORTED_ALG = 'Ed25519';
 type SupportedAlg = typeof SUPPORTED_ALG;
 
-interface CorpusAccessClaim {
+export interface CorpusAccessClaim {
   did: string;
   scope: CorpusAccessScope;
   aud: 'corpus';
@@ -33,6 +33,20 @@ interface CorpusAccessClaim {
   issuedAt: number;
   expiresAt: number;
   nonce: string;
+}
+
+/**
+ * Augments Express's `Request` with the verified claim so downstream route
+ * handlers (`routes.ts`) can read `did`/`scope` without re-parsing the
+ * `Authorization` header. Set only after every check below passes.
+ */
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      corpusAccessClaim?: CorpusAccessClaim;
+    }
+  }
 }
 
 /** Defensive ceiling against a kernel bug minting a too-long-lived claim. */
@@ -166,6 +180,7 @@ export function createAccessClaimMiddleware(): RequestHandler {
       return;
     }
 
+    request.corpusAccessClaim = claim;
     next();
   };
 }
