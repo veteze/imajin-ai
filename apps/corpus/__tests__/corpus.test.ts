@@ -25,14 +25,15 @@ describe('CorpusEngine', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('ingests threads and returns matching search results', () => {
+  it('ingests threads and returns matching search results', async () => {
     engine.ingest('did:example:alice', [
       thread({ id: '1', title: 'Discord connector OAuth bug', body: 'OAuth token refresh fails after reconnect.' }),
       thread({ id: '2', title: 'Billing docs', body: 'Invoices and receipts.' }),
     ]);
 
-    const result = engine.search('did:example:alice', { query: 'OAuth reconnect' });
+    const result = await engine.search('did:example:alice', { query: 'OAuth reconnect' });
 
+    expect(result.mode).toBe('bm25');
     expect(result.totalHits).toBe(1);
     expect(result.results[0]).toMatchObject({
       source: 'github:ima-jin/imajin-ai',
@@ -42,7 +43,7 @@ describe('CorpusEngine', () => {
     expect(result.results[0].evidence[0]).toContain('OAuth');
   });
 
-  it('boosts fixed and merged resolutions above otherwise similar unresolved hits', () => {
+  it('boosts fixed and merged resolutions above otherwise similar unresolved hits', async () => {
     engine.ingest('did:example:alice', [
       thread({
         id: 'open',
@@ -57,42 +58,42 @@ describe('CorpusEngine', () => {
       }),
     ]);
 
-    const result = engine.search('did:example:alice', { query: 'webhook timeout', limit: 2 });
+    const result = await engine.search('did:example:alice', { query: 'webhook timeout', limit: 2 });
 
     expect(result.results[0].id).toBe('fixed');
     expect(result.results[0].score).toBeGreaterThan(result.results[1].score);
   });
 
-  it('caps evidence by the requested token budget', () => {
+  it('caps evidence by the requested token budget', async () => {
     engine.ingest('did:example:alice', [
       thread({ id: 'long', title: 'Long context', body: `needle ${'word '.repeat(500)}` }),
     ]);
 
-    const result = engine.search('did:example:alice', { query: 'needle', budget: 12 });
+    const result = await engine.search('did:example:alice', { query: 'needle', budget: 12 });
 
     expect(result.tokensUsed).toBeLessThanOrEqual(12);
     expect(result.results[0].evidence.join('').length).toBeLessThanOrEqual(48);
   });
 
-  it('keeps databases isolated per owner DID', () => {
+  it('keeps databases isolated per owner DID', async () => {
     engine.ingest('did:example:alice', [thread({ id: 'shared', title: 'Alice secret', body: 'private alpaca memo' })]);
     engine.ingest('did:example:bob', [thread({ id: 'shared', title: 'Bob secret', body: 'private badger memo' })]);
 
-    const alice = engine.search('did:example:alice', { query: 'badger private' });
-    const bob = engine.search('did:example:bob', { query: 'badger private' });
+    const alice = await engine.search('did:example:alice', { query: 'badger private' });
+    const bob = await engine.search('did:example:bob', { query: 'badger private' });
 
     expect(alice.results).toHaveLength(0);
     expect(bob.results).toHaveLength(1);
     expect(bob.results[0].title).toBe('Bob secret');
   });
 
-  it('upserts duplicate source/id pairs instead of duplicating them', () => {
+  it('upserts duplicate source/id pairs instead of duplicating them', async () => {
     engine.ingest('did:example:alice', [thread({ id: '1', title: 'Old title', body: 'legacy keyword' })]);
     engine.ingest('did:example:alice', [thread({ id: '1', title: 'New title', body: 'fresh keyword' })]);
 
     const status = engine.status('did:example:alice');
-    const oldResult = engine.search('did:example:alice', { query: 'legacy' });
-    const newResult = engine.search('did:example:alice', { query: 'fresh' });
+    const oldResult = await engine.search('did:example:alice', { query: 'legacy' });
+    const newResult = await engine.search('did:example:alice', { query: 'fresh' });
 
     expect(status.threadCount).toBe(1);
     expect(oldResult.totalHits).toBe(0);
@@ -113,7 +114,7 @@ describe('CorpusEngine', () => {
     });
   });
 
-  it('deletes all threads for a source', () => {
+  it('deletes all threads for a source', async () => {
     engine.ingest('did:example:alice', [
       thread({ id: '1', source: 'github:ima-jin/imajin-ai', title: 'GitHub bug', body: 'octocat' }),
       thread({ id: '2', source: 'slack:team', sourceType: 'slack', title: 'Slack bug', body: 'chatops' }),
@@ -122,7 +123,7 @@ describe('CorpusEngine', () => {
     const deleted = engine.deleteSource('did:example:alice', 'github:ima-jin/imajin-ai');
 
     expect(deleted.deleted).toBe(1);
-    expect(engine.search('did:example:alice', { query: 'octocat' }).totalHits).toBe(0);
+    expect((await engine.search('did:example:alice', { query: 'octocat' })).totalHits).toBe(0);
     expect(engine.status('did:example:alice').threadCount).toBe(1);
   });
 });

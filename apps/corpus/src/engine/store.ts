@@ -13,6 +13,19 @@ import type {
   ThreadState,
   ThreadType,
 } from './types';
+import {
+  deleteChunksForThreads,
+  loadVectorExtension,
+  listPendingChunks,
+  markChunkPendingWithError,
+  migrateVectorSchema,
+  pendingChunkCount,
+  searchSemantic,
+  storeEmbedding,
+  upsertPendingChunksForThread,
+  type PendingEmbeddingChunk,
+  type SemanticHit,
+} from './vector-store';
 
 /**
  * Default retention knobs for ref-pinned snapshots (#1921): keep the most
@@ -41,9 +54,12 @@ export interface StoredSearchRow {
   rank: number;
   /** Content hash of the matched snapshot version; set only for ref-pinned queries (#1921). */
   contentHash?: string;
+  /** Internal `threads.pk`; set only by `getThreadsByPk` (#1599), used to key semantic-hit merges. */
+  threadPk?: number;
 }
 
 interface ThreadRow {
+  pk: number;
   source: string;
   doc_id: string;
   source_type: string;
@@ -180,6 +196,7 @@ export class CorpusStore {
 
         deleteFts.run(row.pk);
         insertFts.run(row.pk, chunk.title, chunk.body, chunk.comments);
+        upsertPendingChunksForThread(db, row.pk, document, did, hashChunkText, syncedAt);
 
         if (ref) {
           this.recordBlobVersion(blobStatements, document, chunk, ref, syncedAt);
@@ -232,6 +249,7 @@ export class CorpusStore {
     const rows = db
       .prepare(`
         SELECT
+          t.pk,
           t.source,
           t.doc_id,
           t.source_type,
@@ -269,6 +287,7 @@ export class CorpusStore {
       url: row.url ?? undefined,
       updated: row.updated,
       rank: row.rank,
+      threadPk: row.pk,
     }));
   }
 
@@ -337,6 +356,7 @@ export class CorpusStore {
     return {
       sources: this.freshness(did),
       threadCount,
+      pendingEmbeddings: pendingChunkCount(db),
     };
   }
 
@@ -360,6 +380,7 @@ export class CorpusStore {
 
     const transaction = db.transaction(() => {
       const rows = selectRows.all(source) as { pk: number }[];
+      deleteChunksForThreads(db, rows.map(row => row.pk));
       for (const row of rows) {
         deleteFts.run(row.pk);
       }
@@ -369,6 +390,44 @@ export class CorpusStore {
     });
 
     return transaction() as number;
+  }
+
+  // ─── Semantic layer (#1599, #1601) ────────────────────────────────────────
+
+  /** Chunks awaiting an embed pass, oldest first. */
+  pendingChunks(did: string, limit: number): PendingEmbeddingChunk[] {
+    return listPendingChunks(this.databaseForDid(did), limit);
+  }
+
+  /** Persists `vector` for `chunkId` and marks it embedded. */
+  storeChunkEmbedding(did: string, chunkId: number, vector: number[]): void {
+    storeEmbedding(this.databaseForDid(did), chunkId, did, vector);
+  }
+
+  /** Leaves `chunkId` pending (for retry on the next sweep/ingest) and records why it failed. */
+  markChunkFailed(did: string, chunkId: number, message: string): void {
+    markChunkPendingWithError(this.databaseForDid(did), chunkId, message);
+  }
+
+  /** KNN search over `did`'s embeddings, filtered by owner_did first (see vector-store.ts). */
+  semanticSearch(did: string, queryVector: number[], k: number): SemanticHit[] {
+    return searchSemantic(this.databaseForDid(did), did, queryVector, k);
+  }
+
+  /** Full thread rows for a set of internal `thread_pk`s, in the same shape `search()` returns. */
+  getThreadsByPk(did: string, threadPks: number[]): StoredSearchRow[] {
+    if (threadPks.length === 0) return [];
+    const db = this.databaseForDid(did);
+    const placeholders = threadPks.map(() => '?').join(', ');
+    const rows = db
+      .prepare(`
+        SELECT pk, source, doc_id, source_type, thread_type, state, labels_json, author, title, body, comments_json, resolution_json, url, updated
+        FROM threads
+        WHERE pk IN (${placeholders})
+      `)
+      .all(...threadPks) as ThreadByPkRow[];
+
+    return rows.map(row => threadRowToStoredSearchRow(row));
   }
 
   private databaseForDid(did: string): Database.Database {
@@ -383,7 +442,9 @@ export class CorpusStore {
     const db = new Database(join(didDir, 'index.db'));
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+    loadVectorExtension(db);
     this.migrate(db);
+    migrateVectorSchema(db);
     this.handles.set(didHash, db);
     return db;
   }
@@ -649,4 +710,53 @@ function parseJson<T>(value: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+/** Content hash used to detect an embedding chunk's text is unchanged since it was last embedded. */
+function hashChunkText(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+interface ThreadByPkRow {
+  pk: number;
+  source: string;
+  doc_id: string;
+  source_type: string;
+  thread_type: ThreadType;
+  state: ThreadState;
+  labels_json: string;
+  author: string;
+  title: string;
+  body: string;
+  comments_json: string;
+  resolution_json: string | null;
+  url: string | null;
+  updated: string;
+}
+
+/**
+ * Converts a plain `threads` row (fetched by pk, not via FTS) into the same
+ * `StoredSearchRow` shape `search()` returns, for semantic-only hits that
+ * never matched BM25. `rank` has no BM25 meaning here, so it's `0` —
+ * `CorpusEngine`'s hybrid merge scores these rows from vector distance
+ * instead of `rank`.
+ */
+function threadRowToStoredSearchRow(row: ThreadByPkRow): StoredSearchRow {
+  return {
+    source: row.source,
+    docId: row.doc_id,
+    sourceType: row.source_type,
+    threadType: row.thread_type,
+    state: row.state,
+    labels: parseJson<string[]>(row.labels_json, []),
+    author: row.author,
+    title: row.title,
+    body: row.body,
+    comments: parseJson<ThreadDocument['comments']>(row.comments_json, []),
+    resolution: row.resolution_json ? parseJson<ThreadResolution | undefined>(row.resolution_json, undefined) : undefined,
+    url: row.url ?? undefined,
+    updated: row.updated,
+    rank: 0,
+    threadPk: row.pk,
+  };
 }

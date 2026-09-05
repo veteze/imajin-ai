@@ -227,7 +227,7 @@ describe('LocalAdapter + CorpusEngine integration', () => {
     const documents = await collect(adapter.fetch(source));
 
     engine.ingest('did:example:alice', documents);
-    const result = engine.search('did:example:alice', { query: 'OAuth reconnect' });
+    const result = await engine.search('did:example:alice', { query: 'OAuth reconnect' });
 
     expect(result.totalHits).toBe(1);
     expect(result.results[0]).toMatchObject({
