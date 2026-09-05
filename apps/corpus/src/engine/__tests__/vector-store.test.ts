@@ -4,33 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CorpusStore } from '../store';
-import type { ThreadDocument } from '../types';
 import { EMBEDDING_DIMENSIONS, loadVectorExtension, migrateVectorSchema, searchSemantic, storeEmbedding } from '../vector-store';
+import { thread } from './support/thread-fixture';
 
 function oneHot(index: number, dims = EMBEDDING_DIMENSIONS): number[] {
   const vector = new Array(dims).fill(0);
   vector[index] = 1;
   return vector;
-}
-
-function thread(overrides: Partial<ThreadDocument> = {}): ThreadDocument {
-  return {
-    source: overrides.source ?? 'github:ima-jin/imajin-ai',
-    sourceType: overrides.sourceType ?? 'github',
-    id: overrides.id ?? '1',
-    type: overrides.type ?? 'issue',
-    title: overrides.title ?? 'Shared title text',
-    state: overrides.state ?? 'open',
-    labels: overrides.labels ?? [],
-    author: overrides.author ?? 'octocat',
-    created: overrides.created ?? '2026-08-09T15:00:00.000Z',
-    updated: overrides.updated ?? '2026-08-09T16:00:00.000Z',
-    linkedRefs: overrides.linkedRefs ?? [],
-    body: overrides.body ?? 'Shared body content, identical across DIDs for the isolation test.',
-    comments: overrides.comments ?? [],
-    resolution: overrides.resolution,
-    url: overrides.url,
-  };
 }
 
 describe('CorpusStore semantic search — cross-DID isolation (#1599)', () => {
@@ -50,7 +30,7 @@ describe('CorpusStore semantic search — cross-DID isolation (#1599)', () => {
   it('never returns DID B\'s chunk for DID A\'s query, even given identical text and identical vectors', () => {
     const didA = 'did:example:alice';
     const didB = 'did:example:bob';
-    const identicalDoc = thread();
+    const identicalDoc = thread({ title: 'Shared title text', body: 'Shared body content, identical across DIDs for the isolation test.' });
 
     store.ingest(didA, [identicalDoc]);
     store.ingest(didB, [identicalDoc]);
@@ -72,7 +52,7 @@ describe('CorpusStore semantic search — cross-DID isolation (#1599)', () => {
 
     const aliceThreads = store.getThreadsByPk(didA, aliceHits.map(hit => hit.threadPk));
     expect(aliceThreads).toHaveLength(1);
-    expect(aliceThreads[0].title).toBe('Shared title text');
+    expect(aliceThreads[0].body).toContain('identical across DIDs');
   });
 
   it('pendingChunks/status never leak counts across DIDs', () => {

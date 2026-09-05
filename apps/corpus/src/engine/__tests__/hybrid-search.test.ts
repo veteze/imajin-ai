@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PgxClient, type FetchLike } from '../../lib/pgx-client';
 import { CorpusEngine } from '../index';
-import type { ThreadDocument } from '../types';
+import { thread } from './support/thread-fixture';
 
 const EMBED_URL = 'http://pgx.test:8001';
 const RERANK_URL = 'http://pgx.test:8002';
@@ -39,26 +39,6 @@ function embedFetch(routes: [substring: string, vector: number[]][]): FetchLike 
 function alwaysFailingFetch(): FetchLike {
   return async () => {
     throw new Error('ECONNREFUSED');
-  };
-}
-
-function thread(overrides: Partial<ThreadDocument>): ThreadDocument {
-  return {
-    source: overrides.source ?? 'github:ima-jin/imajin-ai',
-    sourceType: overrides.sourceType ?? 'github',
-    id: overrides.id ?? '1',
-    type: overrides.type ?? 'issue',
-    title: overrides.title ?? 'Default title',
-    state: overrides.state ?? 'open',
-    labels: overrides.labels ?? [],
-    author: overrides.author ?? 'octocat',
-    created: overrides.created ?? '2026-08-09T15:00:00.000Z',
-    updated: overrides.updated ?? '2026-08-09T16:00:00.000Z',
-    linkedRefs: overrides.linkedRefs ?? [],
-    body: overrides.body ?? 'Default body',
-    comments: overrides.comments ?? [],
-    resolution: overrides.resolution,
-    url: overrides.url,
   };
 }
 
