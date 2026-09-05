@@ -93,6 +93,12 @@ paths:
                 properties:
                   sources: { type: array, items: { type: object } }
                   threadCount: { type: integer }
+                  attestations:
+                    type: object
+                    description: Ingestion-attestation counters (#1750).
+                    properties:
+                      total: { type: integer }
+                      pendingForward: { type: integer, description: "Attestations not yet successfully forwarded to the kernel." }
 
   /corpus/{did}/search:
     post:
@@ -295,6 +301,44 @@ paths:
                   ingested: { type: integer }
         "400":
           description: Validation error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /corpus/{did}/attestations/{id}:
+    get:
+      tags: [corpus]
+      operationId: corpusGetAttestation
+      summary: Fetch a previously-created ingestion attestation's signed payload, signature, and corpus public key for independent verification (#1750).
+      description: >-
+        Requires a CorpusAccessClaim (see ImajinClaim) scoped corpus:read to this :did.
+        Naturally DID-isolated — `id` is looked up only within this :did's own corpus database, so an id that
+        exists under a different DID's corpus 404s here.
+      security:
+        - ImajinClaim: []
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Signed ingestion attestation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  attestation:
+                    type: object
+                    description: The signed IngestionAttestation (includes its own `signature` field).
+                  corpusPublicKey: { type: string, description: "Hex Ed25519 public key matching the attestation's signature." }
+        "404":
+          description: No attestation with this id exists under this :did's corpus
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

@@ -199,6 +199,9 @@ importers:
       '@imajin/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@imajin/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
       '@octokit/graphql':
         specifier: ^9.0.1
         version: 9.0.4

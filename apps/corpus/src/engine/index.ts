@@ -6,10 +6,19 @@ import type {
   CorpusSearchRequest,
   CorpusSearchResult,
   CorpusStatus,
+  IngestionAttestation,
   ThreadDocument,
 } from './types';
 import { addFreshnessWarnings } from '../lib/freshness';
+import { forwardIngestionAttestation } from '../lib/attestation-forwarder';
+import { loadCorpusIdentity } from '../lib/corpus-identity';
 import { DEFAULT_SEARCH_LIMIT, DEFAULT_TOKEN_BUDGET, estimateTokens, truncateToTokenBudget } from '../lib/tokens';
+
+/** Signed view of an ingestion attestation returned by `GET /corpus/:did/attestations/:id` (#1750). */
+export interface SignedAttestationView {
+  attestation: IngestionAttestation;
+  corpusPublicKey: string;
+}
 
 export interface CorpusEngineOptions extends CorpusStoreOptions {
   now?: () => Date;
@@ -28,14 +37,54 @@ export class CorpusEngine {
     this.store.close();
   }
 
-  ingest(did: string, documents: ThreadDocument[], ref?: string): { ingested: number } {
+  /**
+   * Ingests `documents`, signing+persisting an `IngestionAttestation` per
+   * source when a corpus identity is configured, then fire-and-forgets a
+   * forward to the kernel for every attestation just created plus any still
+   * pending from earlier ingests (#1750). `ingesterDid` defaults to `did`
+   * when a caller (e.g. a direct engine test) doesn't supply one.
+   */
+  ingest(did: string, documents: ThreadDocument[], ref?: string, ingesterDid: string = did): { ingested: number } {
     validateDid(did);
     for (const document of documents) {
       validateThreadDocument(document);
     }
 
-    this.store.ingest(did, documents, this.now().toISOString(), ref);
+    const identity = loadCorpusIdentity();
+    const attestations = this.store.ingest(did, documents, this.now().toISOString(), ref, identity, ingesterDid);
+
+    if (identity) {
+      for (const attestation of attestations) {
+        this.forwardAttestation(did, identity.did, attestation);
+      }
+      for (const pending of this.store.listPendingForwards(did)) {
+        this.forwardAttestation(did, identity.did, pending);
+      }
+    }
+
     return { ingested: documents.length };
+  }
+
+  /** Fire-and-forget: never awaited by callers, records the outcome back onto the stored row. */
+  private forwardAttestation(did: string, corpusServiceDid: string, attestation: IngestionAttestation): void {
+    forwardIngestionAttestation(attestation, corpusServiceDid)
+      .then(result => this.store.recordForwardResult(did, attestation.id, result))
+      .catch(() => {
+        this.store.recordForwardResult(did, attestation.id, { ok: false, error: 'unexpected forward failure' });
+      });
+  }
+
+  /**
+   * Returns the signed payload + corpus public key for a previously-created
+   * ingestion attestation. Naturally DID-isolated: `id` is looked up only
+   * within `did`'s own corpus database (#1750).
+   */
+  getAttestation(did: string, id: string): SignedAttestationView {
+    validateDid(did);
+    if (!id) {
+      throw new Error('id is required');
+    }
+    return this.store.getAttestation(did, id);
   }
 
   search(did: string, request: CorpusSearchRequest): CorpusSearchResult {
@@ -87,6 +136,7 @@ export class CorpusEngine {
         url: scoredRow.row.url,
         updated: scoredRow.row.updated,
         contentHash: scoredRow.row.contentHash,
+        attestationId: scoredRow.row.attestationId,
       });
     }
 
@@ -105,6 +155,7 @@ export class CorpusEngine {
     return {
       sources: addFreshnessWarnings(status.sources, this.now()),
       threadCount: status.threadCount,
+      attestations: status.attestations,
     };
   }
 

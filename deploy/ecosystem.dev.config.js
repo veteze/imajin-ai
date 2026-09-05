@@ -116,6 +116,13 @@ module.exports = {
       // that would be a straight port collision, not a shared value. 8013
       // has no other precedent to follow (corpus is the only 8xxx service),
       // so it's just "8003 + 10" to keep it visually next to its prod pair.
+      //
+      // Secrets (#1750, apps/corpus/.env.example): CORPUS_DID,
+      // CORPUS_DID_PRIVATE_KEY, AUTH_SERVICE_URL, ATTESTATION_INTERNAL_API_KEY.
+      // Deliberately NOT listed in this file's "env" block, matching the
+      // existing CORPUS_KERNEL_PUBLIC_KEY precedent (#2024) — this config is
+      // version-controlled, so real secret values belong in the process
+      // environment / .env.local on the host, never here.
       "name": "dev-corpus",
       "cwd": "/home/jin/dev/imajin-ai/apps/corpus",
       "script": "npm",
