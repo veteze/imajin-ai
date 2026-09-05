@@ -2,12 +2,17 @@ import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { crypto as authCrypto } from '@imajin/auth';
+import { buildIngestionAttestation } from './attestation';
 import { chunkThread, type ThreadChunk } from './chunker';
-import { UnknownRefError } from './errors';
+import { AttestationNotFoundError, UnknownRefError } from './errors';
+import type { CorpusIdentity } from '../lib/corpus-identity';
 import type {
+  CorpusAttestationStats,
   CorpusSearchRequest,
   CorpusSourceFreshness,
   CorpusStatus,
+  IngestionAttestation,
   ThreadDocument,
   ThreadResolution,
   ThreadState,
@@ -26,6 +31,11 @@ import {
   type PendingEmbeddingChunk,
   type SemanticHit,
 } from './vector-store';
+
+/** Bounds how many pending forwards a single `ingest()` call retries (#1750). */
+const MAX_FORWARD_RETRY_BATCH = 5;
+/** After this many failed attempts, a pending forward is no longer retried automatically. */
+const MAX_FORWARD_ATTEMPTS = 10;
 
 /**
  * Default retention knobs for ref-pinned snapshots (#1921): keep the most
@@ -56,6 +66,8 @@ export interface StoredSearchRow {
   contentHash?: string;
   /** Internal `threads.pk`; set only by `getThreadsByPk` (#1599), used to key semantic-hit merges. */
   threadPk?: number;
+  /** Ingestion attestation that wrote/last-touched this thread (#1750). */
+  attestationId?: string;
 }
 
 interface ThreadRow {
@@ -74,6 +86,7 @@ interface ThreadRow {
   url: string | null;
   updated: string;
   rank: number;
+  attestation_id: string | null;
 }
 
 interface SourceRow {
@@ -97,6 +110,26 @@ interface BlobSearchRow {
   updated: string;
   content_hash: string;
   rank: number;
+}
+
+/** Row shape for `ingestion_attestations` (#1750). */
+interface AttestationRow {
+  id: string;
+  owner_did: string;
+  source: string;
+  corpus_did: string;
+  ingester_did: string;
+  content_hash: string;
+  doc_count: number;
+  ref: string | null;
+  signed_at: string;
+  signature: string;
+  signer_public_key: string;
+  payload_json: string;
+  forwarded_at: string | null;
+  kernel_attestation_id: string | null;
+  forward_error: string | null;
+  forward_attempts: number;
 }
 
 export interface CorpusStoreOptions {
@@ -126,7 +159,23 @@ export class CorpusStore {
     this.handles.clear();
   }
 
-  ingest(did: string, documents: ThreadDocument[], syncedAt = new Date().toISOString(), ref?: string): void {
+  /**
+   * Ingests `documents`, then — when `identity` is provided — builds, signs,
+   * and persists one `IngestionAttestation` per distinct `source` in the
+   * batch, backfilling `threads.attestation_id` for exactly the rows just
+   * written (#1750). Returns the attestations created so `CorpusEngine` can
+   * forward them to the kernel; empty when `identity` is `null` (no
+   * CORPUS_DID/CORPUS_DID_PRIVATE_KEY configured) — ingestion always
+   * succeeds either way.
+   */
+  ingest(
+    did: string,
+    documents: ThreadDocument[],
+    syncedAt = new Date().toISOString(),
+    ref?: string,
+    identity: CorpusIdentity | null = null,
+    ingesterDid: string = did,
+  ): IngestionAttestation[] {
     const db = this.databaseForDid(did);
     const upsertThread = db.prepare(`
       INSERT INTO threads (
@@ -161,7 +210,11 @@ export class CorpusStore {
     const selectThreadPk = db.prepare('SELECT pk FROM threads WHERE source = ? AND doc_id = ?');
     const deleteFts = db.prepare('DELETE FROM thread_fts WHERE rowid = ?');
     const insertFts = db.prepare('INSERT INTO thread_fts(rowid, title, body, comments) VALUES (?, ?, ?, ?)');
+    const updateThreadAttestation = db.prepare('UPDATE threads SET attestation_id = ? WHERE source = ? AND doc_id = ?');
+    const insertAttestation = this.prepareInsertAttestation(db);
     const blobStatements = this.prepareBlobStatements(db);
+
+    const createdAttestations: IngestionAttestation[] = [];
 
     const transaction = db.transaction((batch: ThreadDocument[]) => {
       for (const document of batch) {
@@ -209,10 +262,71 @@ export class CorpusStore {
         if (ref) {
           this.pruneVersions(db, source, syncedAt);
         }
+
+        if (!identity) continue;
+
+        const attestation = this.signSourceAttestation({
+          identity,
+          source,
+          did,
+          ingesterDid,
+          ref,
+          syncedAt,
+          sourceDocuments: batch.filter(document => document.source === source),
+          insertAttestation,
+          updateThreadAttestation,
+        });
+        createdAttestations.push(attestation);
       }
     });
 
     transaction(documents);
+    return createdAttestations;
+  }
+
+  /** Builds, signs, and persists one `IngestionAttestation` for `source`'s slice of a batch; backfills `threads.attestation_id` for those rows. */
+  private signSourceAttestation(params: {
+    identity: CorpusIdentity;
+    source: string;
+    did: string;
+    ingesterDid: string;
+    ref: string | undefined;
+    syncedAt: string;
+    sourceDocuments: ThreadDocument[];
+    insertAttestation: Database.Statement;
+    updateThreadAttestation: Database.Statement;
+  }): IngestionAttestation {
+    const { identity, source, did, ingesterDid, ref, syncedAt, sourceDocuments, insertAttestation, updateThreadAttestation } = params;
+
+    const attestation = buildIngestionAttestation({
+      identity,
+      source,
+      corpusDid: did,
+      ingesterDid,
+      documentPairs: sourceDocuments.map(document => ({ docId: document.id, updated: document.updated })),
+      timestamp: syncedAt,
+    });
+
+    insertAttestation.run({
+      id: attestation.id,
+      ownerDid: did,
+      source: attestation.source,
+      corpusDid: attestation.corpusDid,
+      ingesterDid: attestation.ingesterDid,
+      contentHash: attestation.contentHash,
+      docCount: attestation.threadCount,
+      ref: ref ?? null,
+      signedAt: attestation.timestamp,
+      signature: attestation.signature,
+      signerPublicKey: authCrypto.getPublicKey(identity.privateKey),
+      payloadJson: JSON.stringify(attestation),
+    });
+
+    for (const document of sourceDocuments) {
+      updateThreadAttestation.run(attestation.id, source, document.id);
+    }
+
+    return attestation;
   }
 
   search(did: string, request: Required<Pick<CorpusSearchRequest, 'limit'>> & CorpusSearchRequest): StoredSearchRow[] {
@@ -263,6 +377,7 @@ export class CorpusStore {
           t.resolution_json,
           t.url,
           t.updated,
+          t.attestation_id,
           bm25(thread_fts, 2.0, 1.0, 1.0) AS rank
         FROM thread_fts
         JOIN threads t ON t.pk = thread_fts.rowid
@@ -288,6 +403,7 @@ export class CorpusStore {
       updated: row.updated,
       rank: row.rank,
       threadPk: row.pk,
+      attestationId: row.attestation_id ?? undefined,
     }));
   }
 
@@ -357,7 +473,70 @@ export class CorpusStore {
       sources: this.freshness(did),
       threadCount,
       pendingEmbeddings: pendingChunkCount(db),
+      attestations: this.attestationStats(db),
     };
+  }
+
+  /** Counters for `GET /corpus/:did/status`'s `attestations` field (#1750). */
+  private attestationStats(db: Database.Database): CorpusAttestationStats {
+    const row = db
+      .prepare('SELECT COUNT(*) AS total, SUM(CASE WHEN forwarded_at IS NULL THEN 1 ELSE 0 END) AS pending FROM ingestion_attestations')
+      .get() as { total: number; pending: number | null };
+
+    return { total: row.total, pendingForward: row.pending ?? 0 };
+  }
+
+  /**
+   * Returns the signed payload for `id` under `did`'s corpus — or throws
+   * `AttestationNotFoundError` when `id` doesn't exist in *this* DID's
+   * database, including when it exists under a different DID's (#1750's
+   * "DID isolation" requirement: each DID's attestations live in a separate
+   * SQLite file, so there is nothing to filter — the lookup is naturally scoped).
+   */
+  getAttestation(did: string, id: string): { attestation: IngestionAttestation; corpusPublicKey: string } {
+    const db = this.databaseForDid(did);
+    const row = db.prepare('SELECT payload_json, signer_public_key FROM ingestion_attestations WHERE id = ?').get(id) as
+      | Pick<AttestationRow, 'payload_json' | 'signer_public_key'>
+      | undefined;
+
+    if (!row) {
+      throw new AttestationNotFoundError(did, id);
+    }
+
+    return {
+      attestation: JSON.parse(row.payload_json) as IngestionAttestation,
+      corpusPublicKey: row.signer_public_key,
+    };
+  }
+
+  /**
+   * Attestations still awaiting a successful forward to the kernel, oldest
+   * first, capped at `limit` and excluding rows that already exhausted
+   * `MAX_FORWARD_ATTEMPTS` — the bounded retry #1750 asks for.
+   */
+  listPendingForwards(did: string, limit: number = MAX_FORWARD_RETRY_BATCH): IngestionAttestation[] {
+    const db = this.databaseForDid(did);
+    const rows = db
+      .prepare(
+        'SELECT payload_json FROM ingestion_attestations WHERE forwarded_at IS NULL AND forward_attempts < ? ORDER BY signed_at ASC LIMIT ?',
+      )
+      .all(MAX_FORWARD_ATTEMPTS, limit) as Pick<AttestationRow, 'payload_json'>[];
+
+    return rows.map(row => JSON.parse(row.payload_json) as IngestionAttestation);
+  }
+
+  /** Records the outcome of a forward attempt for `id`, incrementing its attempt counter. */
+  recordForwardResult(
+    did: string,
+    id: string,
+    result: { ok: boolean; kernelAttestationId?: string; error?: string },
+  ): void {
+    const db = this.databaseForDid(did);
+    db.prepare(
+      `UPDATE ingestion_attestations
+       SET forwarded_at = ?, kernel_attestation_id = ?, forward_error = ?, forward_attempts = forward_attempts + 1
+       WHERE id = ?`,
+    ).run(result.ok ? new Date().toISOString() : null, result.kernelAttestationId ?? null, result.error ?? null, id);
   }
 
   freshness(did: string): CorpusSourceFreshness[] {
@@ -524,6 +703,60 @@ export class CorpusStore {
         ingested_at TEXT NOT NULL,
         PRIMARY KEY (source, doc_id, ref)
       );
+
+      -- Ingestion attestations (#1750): the corpus service's own signed,
+      -- low-latency record that it ingested a batch of documents for
+      -- (owner_did, source), independent of whether the kernel forward
+      -- below has succeeded yet. "ref" is the git ref pinned at ingest time,
+      -- when known — null for non-git sources (e.g. github: adapter).
+      CREATE TABLE IF NOT EXISTS ingestion_attestations (
+        id TEXT PRIMARY KEY,
+        owner_did TEXT NOT NULL,
+        source TEXT NOT NULL,
+        corpus_did TEXT NOT NULL,
+        ingester_did TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        doc_count INTEGER NOT NULL,
+        ref TEXT,
+        signed_at TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        signer_public_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        forwarded_at TEXT,
+        kernel_attestation_id TEXT,
+        forward_error TEXT,
+        forward_attempts INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ingestion_attestations_pending
+        ON ingestion_attestations(forwarded_at)
+        WHERE forwarded_at IS NULL;
+    `);
+
+    // threads predates ingestion attestations, so existing databases need
+    // this column backfilled — CREATE TABLE IF NOT EXISTS above only helps
+    // brand-new databases. Safe to call on every open: it's a no-op once
+    // the column exists.
+    this.ensureColumn(db, 'threads', 'attestation_id', 'attestation_id TEXT');
+  }
+
+  /** Idempotently adds `column` to `table` if it isn't already present (for additive migrations on pre-existing databases). */
+  private ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!columns.some(existing => existing.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    }
+  }
+
+  private prepareInsertAttestation(db: Database.Database): Database.Statement {
+    return db.prepare(`
+      INSERT INTO ingestion_attestations (
+        id, owner_did, source, corpus_did, ingester_did, content_hash, doc_count, ref,
+        signed_at, signature, signer_public_key, payload_json
+      ) VALUES (
+        @id, @ownerDid, @source, @corpusDid, @ingesterDid, @contentHash, @docCount, @ref,
+        @signedAt, @signature, @signerPublicKey, @payloadJson
+      )
     `);
   }
 

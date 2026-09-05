@@ -1,16 +1,17 @@
-import express, { type Response, type Router } from 'express';
+import express, { type Request, type Response, type Router } from 'express';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubAdapter, isGitHubSource } from './adapters/github';
 import { LocalAdapter } from './adapters/local';
 import { CorpusEngine } from './engine';
-import { UnknownRefError } from './engine/errors';
+import { AttestationNotFoundError, UnknownRefError } from './engine/errors';
 import type { CorpusSearchRequest, SourceType, ThreadDocument } from './engine/types';
 import { resolveGitRef } from './lib/git';
 import { isWorkspaceSource, resolveWorkspacePath, validateSourcePath, workspaceRootForDid, type WorkspaceOptions } from './lib/workspace';
-// Service DID + ingestion-attestation signing (#2021 checklist) is not built
-// yet; only claim verification lands here. See middleware/access-claim.ts.
+// Service DID + ingestion-attestation signing (#1750, folded into #2021's
+// checklist) lands here: claim verification (middleware/access-claim.ts)
+// plus the corpus identity + signing/forwarding wired through engine/index.ts.
 import { createAccessClaimMiddleware } from './middleware/access-claim';
 
 export type CorpusRouterOptions = WorkspaceOptions;
@@ -26,9 +27,10 @@ export function createCorpusRouter(engine: CorpusEngine, options: CorpusRouterOp
     handle(response, async () => {
       const body: unknown = request.body;
       const did = request.params.did;
+      const ingesterDid = ingesterDidFor(request);
 
       if (isSourceRequest(body)) {
-        const result = await crawlSource(engine, did, body.source, options);
+        const result = await crawlSource(engine, did, body.source, options, ingesterDid);
         triggerEmbedSweep(engine, did);
         return result;
       }
@@ -37,7 +39,7 @@ export function createCorpusRouter(engine: CorpusEngine, options: CorpusRouterOp
         throw new Error('body must be a ThreadDocument[] or { source }');
       }
 
-      const result = engine.ingest(did, body as ThreadDocument[]);
+      const result = engine.ingest(did, body as ThreadDocument[], undefined, ingesterDid);
       triggerEmbedSweep(engine, did);
       return result;
     });
@@ -49,7 +51,7 @@ export function createCorpusRouter(engine: CorpusEngine, options: CorpusRouterOp
 
   router.post('/corpus/:did/sources', (request, response) => {
     handle(response, async () => {
-      const result = await registerSource(engine, request.params.did, request.body as SourceRegistration, options);
+      const result = await registerSource(engine, request.params.did, request.body as SourceRegistration, options, ingesterDidFor(request));
       triggerEmbedSweep(engine, request.params.did);
       return result;
     });
@@ -63,7 +65,7 @@ export function createCorpusRouter(engine: CorpusEngine, options: CorpusRouterOp
     }
 
     handle(response, async () => {
-      const result = await syncSource(engine, request.params.did, body.source as string, body.cursor ?? null, options);
+      const result = await syncSource(engine, request.params.did, body.source as string, body.cursor ?? null, options, ingesterDidFor(request));
       triggerEmbedSweep(engine, request.params.did);
       return result;
     });
@@ -76,7 +78,7 @@ export function createCorpusRouter(engine: CorpusEngine, options: CorpusRouterOp
         throw new Error('source is required');
       }
 
-      const result = await crawlSource(engine, request.params.did, body.source, options);
+      const result = await crawlSource(engine, request.params.did, body.source, options, ingesterDidFor(request));
       triggerEmbedSweep(engine, request.params.did);
       return result;
     });
@@ -84,6 +86,10 @@ export function createCorpusRouter(engine: CorpusEngine, options: CorpusRouterOp
 
   router.get('/corpus/:did/status', (request, response) => {
     handle(response, () => engine.status(request.params.did));
+  });
+
+  router.get('/corpus/:did/attestations/:id', (request, response) => {
+    handle(response, () => engine.getAttestation(request.params.did, request.params.id));
   });
 
   router.delete('/corpus/:did/source', (request, response) => {
@@ -188,17 +194,27 @@ async function collectDocuments(iterable: AsyncIterable<ThreadDocument>): Promis
   return documents;
 }
 
+/** Reads the DID the verified CorpusAccessClaim authorized this request for, falling back to the `:did` path param (e.g. for tests that bypass the middleware). */
+function ingesterDidFor(request: Request): string {
+  if (request.corpusAccessClaim?.did) {
+    return request.corpusAccessClaim.did;
+  }
+  const paramDid = request.params.did;
+  return Array.isArray(paramDid) ? paramDid[0] : paramDid;
+}
+
 async function crawlWorkspaceSource(
   engine: CorpusEngine,
   did: string,
   source: string,
   options: WorkspaceOptions,
+  ingesterDid: string,
 ): Promise<{ ingested: number }> {
   const resolvedPath = resolveLocalWorkspaceSource(did, source, options);
   const adapter = new LocalAdapter();
   const documents = rewriteSource(await collectDocuments(adapter.fetch(`local:${resolvedPath}`)), source);
 
-  return engine.ingest(did, documents, resolveGitRef(resolvedPath));
+  return engine.ingest(did, documents, resolveGitRef(resolvedPath), ingesterDid);
 }
 
 async function syncWorkspaceSource(
@@ -207,21 +223,22 @@ async function syncWorkspaceSource(
   source: string,
   cursor: string | null,
   options: WorkspaceOptions,
+  ingesterDid: string,
 ): Promise<{ ingested: number; cursor: string | null; hasMore: boolean }> {
   const resolvedPath = resolveLocalWorkspaceSource(did, source, options);
   const adapter = new LocalAdapter();
   const result = await adapter.sync(`local:${resolvedPath}`, cursor);
   const documents = rewriteSource(result.documents, source);
-  engine.ingest(did, documents, resolveGitRef(resolvedPath));
+  engine.ingest(did, documents, resolveGitRef(resolvedPath), ingesterDid);
 
   return { ingested: documents.length, cursor: result.cursor, hasMore: result.hasMore };
 }
 
-async function crawlGitHubSource(engine: CorpusEngine, did: string, source: string): Promise<{ ingested: number }> {
+async function crawlGitHubSource(engine: CorpusEngine, did: string, source: string, ingesterDid: string): Promise<{ ingested: number }> {
   const adapter = new GitHubAdapter();
   const documents = await collectDocuments(adapter.fetch(source));
 
-  return engine.ingest(did, documents);
+  return engine.ingest(did, documents, undefined, ingesterDid);
 }
 
 async function syncGitHubSource(
@@ -229,10 +246,11 @@ async function syncGitHubSource(
   did: string,
   source: string,
   cursor: string | null,
+  ingesterDid: string,
 ): Promise<{ ingested: number; cursor: string | null; hasMore: boolean }> {
   const adapter = new GitHubAdapter();
   const result = await adapter.sync(source, cursor);
-  engine.ingest(did, result.documents);
+  engine.ingest(did, result.documents, undefined, ingesterDid);
 
   return { ingested: result.documents.length, cursor: result.cursor, hasMore: result.hasMore };
 }
@@ -247,10 +265,11 @@ async function crawlSource(
   did: string,
   source: string,
   options: WorkspaceOptions,
+  ingesterDid: string,
 ): Promise<{ ingested: number }> {
   const kind = sourceKind(source);
-  if (kind === WORKSPACE_KIND) return crawlWorkspaceSource(engine, did, source, options);
-  if (kind === GITHUB_KIND) return crawlGitHubSource(engine, did, source);
+  if (kind === WORKSPACE_KIND) return crawlWorkspaceSource(engine, did, source, options, ingesterDid);
+  if (kind === GITHUB_KIND) return crawlGitHubSource(engine, did, source, ingesterDid);
   throw unsupportedSourceError(source);
 }
 
@@ -261,10 +280,11 @@ async function syncSource(
   source: string,
   cursor: string | null,
   options: WorkspaceOptions,
+  ingesterDid: string,
 ): Promise<{ ingested: number; cursor: string | null; hasMore: boolean }> {
   const kind = sourceKind(source);
-  if (kind === WORKSPACE_KIND) return syncWorkspaceSource(engine, did, source, cursor, options);
-  if (kind === GITHUB_KIND) return syncGitHubSource(engine, did, source, cursor);
+  if (kind === WORKSPACE_KIND) return syncWorkspaceSource(engine, did, source, cursor, options, ingesterDid);
+  if (kind === GITHUB_KIND) return syncGitHubSource(engine, did, source, cursor, ingesterDid);
   throw unsupportedSourceError(source);
 }
 
@@ -280,6 +300,7 @@ async function registerSource(
   did: string,
   body: SourceRegistration,
   options: WorkspaceOptions,
+  ingesterDid: string,
 ): Promise<{ ingested: number }> {
   if (!body?.source) {
     throw new Error('source is required');
@@ -293,7 +314,7 @@ async function registerSource(
     throw new Error(`type "${body.type}" does not match source "${body.source}"`);
   }
 
-  return crawlSource(engine, did, body.source, options);
+  return crawlSource(engine, did, body.source, options, ingesterDid);
 }
 
 const SPEC_FILE_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'api-spec', 'openapi.yaml');
@@ -313,6 +334,10 @@ async function handle<T>(response: Response, fn: () => T | Promise<T>): Promise<
   } catch (error) {
     if (error instanceof UnknownRefError) {
       response.status(404).json({ error: error.message, hint: 'trigger ingest at this ref' });
+      return;
+    }
+    if (error instanceof AttestationNotFoundError) {
+      response.status(404).json({ error: error.message });
       return;
     }
     response.status(400).json({ error: error instanceof Error ? error.message : 'request failed' });
