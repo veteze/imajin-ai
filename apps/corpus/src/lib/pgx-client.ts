@@ -41,7 +41,7 @@ export interface PgxClientOptions {
 }
 
 function readIntEnv(value: string | undefined, fallback: number): number {
-  const parsed = value ? Number.parseInt(value, 10) : NaN;
+  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
