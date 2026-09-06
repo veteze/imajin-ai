@@ -75,6 +75,7 @@ vi.mock('@/lib/utils', () => ({
 // ─── Subject ────────────────────────────────────────────────────────────────
 
 import { PATCH } from '../route';
+import { REGISTRY_NODE_SELF, expectRegistrySourcedShares, expectDefaultShares } from '../../../../../../../packages/fair/src/test-helpers';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -114,23 +115,14 @@ describe('PATCH /api/listings/:id (#2000: node config sourced via getNodeSelf())
   });
 
   it('recalculates the .fair manifest with the registry-sourced fee config when price changes', async () => {
-    mocks.getNodeSelfMock.mockResolvedValue({
-      did: 'did:imajin:jin',
-      nodeOperatorDid: 'did:imajin:operator',
-      nodeFeeBps: 80,
-      buyerCreditBps: 30,
-    });
+    mocks.getNodeSelfMock.mockResolvedValue(REGISTRY_NODE_SELF);
 
     const res = await PATCH(makeRequest({ price: 5000 }), ROUTE_PARAMS);
     expect(res.status).toBe(200);
     expect(mocks.getNodeSelfMock).toHaveBeenCalled();
 
     const body = await res.json();
-    const chain = body.fairManifest.chain as Array<{ did: string; role: string; share: number }>;
-    const nodeEntry = chain.find((e) => e.role === 'node');
-    const buyerEntry = chain.find((e) => e.role === 'buyer_credit');
-    expect(nodeEntry).toMatchObject({ did: 'did:imajin:operator', share: 0.008 });
-    expect(buyerEntry).toMatchObject({ share: 0.003 });
+    expectRegistrySourcedShares(body.fairManifest.chain);
   });
 
   it('falls back to .fair defaults when the registry is unavailable (getNodeSelf() → null)', async () => {
@@ -140,9 +132,7 @@ describe('PATCH /api/listings/:id (#2000: node config sourced via getNodeSelf())
     expect(res.status).toBe(200);
 
     const body = await res.json();
-    const chain = body.fairManifest.chain as Array<{ did: string; role: string; share: number }>;
-    const nodeEntry = chain.find((e) => e.role === 'node');
-    expect(nodeEntry).toMatchObject({ did: 'NODE_PLACEHOLDER', share: 0.005 });
+    expectDefaultShares(body.fairManifest.chain);
   });
 
   it('does not recalculate the .fair manifest (and does not call getNodeSelf) when price/tier/seller are unchanged', async () => {

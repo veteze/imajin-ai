@@ -65,6 +65,7 @@ vi.mock('@/lib/utils', () => ({
 // ─── Subject ────────────────────────────────────────────────────────────────
 
 import { POST } from '../route';
+import { REGISTRY_NODE_SELF, expectRegistrySourcedShares, expectDefaultShares } from '../../../../../../packages/fair/src/test-helpers';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -92,23 +93,14 @@ describe('POST /api/courses (#2000: node config sourced via getNodeSelf())', () 
   });
 
   it('uses the registry-sourced fee config in the persisted .fair manifest', async () => {
-    mocks.getNodeSelfMock.mockResolvedValue({
-      did: 'did:imajin:jin',
-      nodeOperatorDid: 'did:imajin:operator',
-      nodeFeeBps: 80,
-      buyerCreditBps: 30,
-    });
+    mocks.getNodeSelfMock.mockResolvedValue(REGISTRY_NODE_SELF);
 
     const res = await POST(makeRequest(VALID_BODY));
     expect(res.status).toBe(201);
     expect(mocks.getNodeSelfMock).toHaveBeenCalled();
 
     const body = await res.json();
-    const chain = body.metadata.fair.chain as Array<{ did: string; role: string; share: number }>;
-    const nodeEntry = chain.find((e) => e.role === 'node');
-    const buyerEntry = chain.find((e) => e.role === 'buyer_credit');
-    expect(nodeEntry).toMatchObject({ did: 'did:imajin:operator', share: 0.008 });
-    expect(buyerEntry).toMatchObject({ share: 0.003 });
+    expectRegistrySourcedShares(body.metadata.fair.chain);
   });
 
   it('falls back to .fair defaults when the registry is unavailable (getNodeSelf() → null)', async () => {
@@ -118,8 +110,6 @@ describe('POST /api/courses (#2000: node config sourced via getNodeSelf())', () 
     expect(res.status).toBe(201);
 
     const body = await res.json();
-    const chain = body.metadata.fair.chain as Array<{ did: string; role: string; share: number }>;
-    const nodeEntry = chain.find((e) => e.role === 'node');
-    expect(nodeEntry).toMatchObject({ did: 'NODE_PLACEHOLDER', share: 0.005 });
+    expectDefaultShares(body.metadata.fair.chain);
   });
 });
