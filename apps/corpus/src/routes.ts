@@ -24,19 +24,24 @@ export function createCorpusRouter(engine: CorpusEngine, options: CorpusRouterOp
   router.use('/corpus/:did', createAccessClaimMiddleware());
 
   router.post('/corpus/:did/ingest', (request, response) => {
-    handle(response, () => {
+    handle(response, async () => {
       const body: unknown = request.body;
+      const did = request.params.did;
       const ingesterDid = ingesterDidFor(request);
 
       if (isSourceRequest(body)) {
-        return crawlSource(engine, request.params.did, body.source, options, ingesterDid);
+        const result = await crawlSource(engine, did, body.source, options, ingesterDid);
+        triggerEmbedSweep(engine, did);
+        return result;
       }
 
       if (!Array.isArray(body)) {
         throw new Error('body must be a ThreadDocument[] or { source }');
       }
 
-      return engine.ingest(request.params.did, body as ThreadDocument[], undefined, ingesterDid);
+      const result = engine.ingest(did, body as ThreadDocument[], undefined, ingesterDid);
+      triggerEmbedSweep(engine, did);
+      return result;
     });
   });
 
@@ -45,7 +50,11 @@ export function createCorpusRouter(engine: CorpusEngine, options: CorpusRouterOp
   });
 
   router.post('/corpus/:did/sources', (request, response) => {
-    handle(response, () => registerSource(engine, request.params.did, request.body as SourceRegistration, options, ingesterDidFor(request)));
+    handle(response, async () => {
+      const result = await registerSource(engine, request.params.did, request.body as SourceRegistration, options, ingesterDidFor(request));
+      triggerEmbedSweep(engine, request.params.did);
+      return result;
+    });
   });
 
   router.post('/corpus/:did/sync', (request, response) => {
@@ -55,17 +64,23 @@ export function createCorpusRouter(engine: CorpusEngine, options: CorpusRouterOp
       return;
     }
 
-    handle(response, () => syncSource(engine, request.params.did, body.source as string, body.cursor ?? null, options, ingesterDidFor(request)));
+    handle(response, async () => {
+      const result = await syncSource(engine, request.params.did, body.source as string, body.cursor ?? null, options, ingesterDidFor(request));
+      triggerEmbedSweep(engine, request.params.did);
+      return result;
+    });
   });
 
   router.post('/corpus/:did/crawl', (request, response) => {
-    handle(response, () => {
+    handle(response, async () => {
       const body = request.body as { source?: string };
       if (!body?.source) {
         throw new Error('source is required');
       }
 
-      return crawlSource(engine, request.params.did, body.source, options, ingesterDidFor(request));
+      const result = await crawlSource(engine, request.params.did, body.source, options, ingesterDidFor(request));
+      triggerEmbedSweep(engine, request.params.did);
+      return result;
     });
   });
 
@@ -158,6 +173,17 @@ function resolveLocalWorkspaceSource(did: string, source: string, options: Works
 
 function rewriteSource(documents: ThreadDocument[], originalSource: string): ThreadDocument[] {
   return documents.map(document => ({ ...document, source: originalSource }));
+}
+
+/**
+ * Kicks off a non-blocking embedding sweep after an ingest-shaped route
+ * writes new/changed threads (#1599, #1601) — "async/batched" per the
+ * ticket: the HTTP response for the triggering route is not held up by it,
+ * and a PGX failure here never surfaces as a request error since
+ * `embedPending` already fails closed (leaves chunks `pending` for retry).
+ */
+function triggerEmbedSweep(engine: CorpusEngine, did: string): void {
+  void engine.embedPending(did).catch(() => {});
 }
 
 async function collectDocuments(iterable: AsyncIterable<ThreadDocument>): Promise<ThreadDocument[]> {

@@ -43,39 +43,39 @@ describe('CorpusEngine ref-pinned search (#1921)', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('throws UnknownRefError for a ref that was never ingested', () => {
+  it('throws UnknownRefError for a ref that was never ingested', async () => {
     engine.ingest('did:example:alice', [doc({ body: 'hello' })], SHA_A);
 
-    expect(() => engine.search('did:example:alice', { query: 'hello', source: SOURCE, ref: '0'.repeat(40) })).toThrow(
-      UnknownRefError,
-    );
+    await expect(
+      engine.search('did:example:alice', { query: 'hello', source: SOURCE, ref: '0'.repeat(40) }),
+    ).rejects.toThrow(UnknownRefError);
   });
 
-  it('requires source when ref is set', () => {
-    expect(() => engine.search('did:example:alice', { query: 'hello', ref: SHA_A })).toThrow(/source is required/);
+  it('requires source when ref is set', async () => {
+    await expect(engine.search('did:example:alice', { query: 'hello', ref: SHA_A })).rejects.toThrow(/source is required/);
   });
 
-  it('is deterministic across an intervening ingest at a new ref, including content hashes', () => {
+  it('is deterministic across an intervening ingest at a new ref, including content hashes', async () => {
     engine.ingest('did:example:alice', [doc({ body: 'hello' })], SHA_A);
 
-    const first = engine.search('did:example:alice', { query: 'hello', source: SOURCE, ref: SHA_A });
+    const first = await engine.search('did:example:alice', { query: 'hello', source: SOURCE, ref: SHA_A });
 
     // Simulate a "/sync" to a new sha with changed content.
     engine.ingest('did:example:alice', [doc({ body: 'hello world' })], SHA_B);
 
-    const second = engine.search('did:example:alice', { query: 'hello', source: SOURCE, ref: SHA_A });
+    const second = await engine.search('did:example:alice', { query: 'hello', source: SOURCE, ref: SHA_A });
 
     expect(second).toEqual(first);
     expect(first.provenance?.chunks).toEqual(second.provenance?.chunks);
     expect(first.results[0].contentHash).toBeDefined();
   });
 
-  it('resolves different content at a different ref', () => {
+  it('resolves different content at a different ref', async () => {
     engine.ingest('did:example:alice', [doc({ body: 'hello' })], SHA_A);
     engine.ingest('did:example:alice', [doc({ body: 'hello world' })], SHA_B);
 
-    const atA = engine.search('did:example:alice', { query: 'world', source: SOURCE, ref: SHA_A });
-    const atB = engine.search('did:example:alice', { query: 'world', source: SOURCE, ref: SHA_B });
+    const atA = await engine.search('did:example:alice', { query: 'world', source: SOURCE, ref: SHA_A });
+    const atB = await engine.search('did:example:alice', { query: 'world', source: SOURCE, ref: SHA_B });
 
     expect(atA.totalHits).toBe(0);
     expect(atB.totalHits).toBe(1);
@@ -83,20 +83,20 @@ describe('CorpusEngine ref-pinned search (#1921)', () => {
     expect(atB.provenance?.ref).toBe(SHA_B);
   });
 
-  it('never returns ref-pinned results for a plain, unpinned search', () => {
+  it('never returns ref-pinned results for a plain, unpinned search', async () => {
     engine.ingest('did:example:alice', [doc({ body: 'hello' })], SHA_A);
 
-    const result = engine.search('did:example:alice', { query: 'hello' });
+    const result = await engine.search('did:example:alice', { query: 'hello' });
 
     expect(result.provenance).toBeUndefined();
     expect(result.results[0].contentHash).toBeUndefined();
   });
 
-  it('does not record a ref manifest for ingests without a resolved ref', () => {
+  it('does not record a ref manifest for ingests without a resolved ref', async () => {
     engine.ingest('did:example:alice', [doc({ body: 'hello' })]);
 
-    expect(() => engine.search('did:example:alice', { query: 'hello', source: SOURCE, ref: SHA_A })).toThrow(
-      UnknownRefError,
-    );
+    await expect(
+      engine.search('did:example:alice', { query: 'hello', source: SOURCE, ref: SHA_A }),
+    ).rejects.toThrow(UnknownRefError);
   });
 });

@@ -93,6 +93,7 @@ paths:
                 properties:
                   sources: { type: array, items: { type: object } }
                   threadCount: { type: integer }
+                  pendingEmbeddings: { type: integer, description: "Embedding chunks awaiting (or re-awaiting, after a failed PGX attempt) an embed pass (#1599, #1601)." }
                   attestations:
                     type: object
                     description: Ingestion-attestation counters (#1750).
@@ -109,6 +110,9 @@ paths:
         Requires a CorpusAccessClaim (see ImajinClaim) scoped corpus:read to this :did; minted by the kernel MCP corpus_search tool.
         Set `ref` to pin results to a previously-ingested git sha for a `local:workspace` source (#1921): the response
         is then filtered to that ref's snapshot manifest and includes a `provenance` block (sha, doc ids, content hashes).
+        Set `mode` (#1599, #1601) to force a retrieval strategy; defaults to `hybrid` when a PGX embedder is configured
+        for this service, `bm25` otherwise. A `ref`-pinned query always runs `bm25`-only regardless of `mode`, since the
+        vector index has no "as of this ref" notion.
       security:
         - ImajinClaim: []
       parameters:
@@ -134,12 +138,28 @@ paths:
                 limit: { type: integer }
                 budget: { type: integer }
                 ref: { type: string, description: "Pin the query to a previously-ingested git sha for source (#1921). Requires source." }
+                mode: { type: string, enum: [bm25, semantic, hybrid], description: "Force a retrieval strategy (#1599, #1601). See the operation description for defaults." }
       responses:
         "200":
           description: Search results
           content:
             application/json:
-              schema: { type: object }
+              schema:
+                type: object
+                properties:
+                  results: { type: array, items: { type: object } }
+                  totalHits: { type: integer }
+                  freshness: { type: array, items: { type: object } }
+                  tokensUsed: { type: integer }
+                  provenance: { type: object }
+                  mode: { type: string, enum: [bm25, semantic, hybrid], description: "Retrieval strategy actually used to produce results." }
+                  degraded:
+                    type: array
+                    items: { type: string, enum: [semantic, rerank] }
+                    description: >-
+                      Present only when a requested capability silently fell back instead of erroring —
+                      e.g. ["semantic"] when PGX embedding failed and results are BM25-only, or ["rerank"]
+                      when the PGX reranker was unavailable but semantic retrieval still ran.
         "400":
           description: Validation error
           content:

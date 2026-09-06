@@ -22,6 +22,39 @@ export class UnknownRefError extends Error {
 }
 
 /**
+ * Thrown by `PgxClient.embed`/`PgxClient.rerank` (#1601) whenever the PGX
+ * (bge-m3 embedder / bge-reranker-v2-m3) can't be reached, times out, or
+ * answers with a non-2xx status. Callers must treat this as fail-CLOSED:
+ * catch it and degrade the caller's operation (e.g. hybrid search falls
+ * back to BM25-only, ingest leaves chunks `pending` for retry) rather than
+ * letting it surface as an unhandled rejection or a 500.
+ */
+export class PgxUnavailableError extends Error {
+  constructor(
+    public readonly endpoint: 'embed' | 'rerank',
+    public readonly url: string,
+    public readonly cause?: unknown,
+  ) {
+    super(`PGX ${endpoint} endpoint unreachable at "${url}": ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'PgxUnavailableError';
+  }
+}
+
+/**
+ * Thrown when `PgxClient.embed`/`PgxClient.rerank` is called but the
+ * corresponding URL (`PGX_EMBED_URL`/`PGX_RERANK_URL`) was never configured.
+ * Distinct from `PgxUnavailableError` (a reachability failure) so callers
+ * can tell "not set up" apart from "set up but down" if they ever need to.
+ * In practice both are handled the same way by search/ingest: fail closed.
+ */
+export class PgxNotConfiguredError extends Error {
+  constructor(public readonly endpoint: 'embed' | 'rerank') {
+    super(`PGX ${endpoint} endpoint is not configured (see .env.example).`);
+    this.name = 'PgxNotConfiguredError';
+  }
+}
+
+/**
  * Thrown by `CorpusEngine.getAttestation` when `id` has no matching row in
  * `did`'s corpus database — including when `id` exists under a *different*
  * DID's database, since each DID's ingestion attestations live in its own

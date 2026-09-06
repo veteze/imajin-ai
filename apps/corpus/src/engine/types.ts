@@ -106,6 +106,9 @@ export interface CorpusAdapter {
   sync(source: string, cursor: string | null, options?: AdapterFetchOptions): Promise<AdapterSyncResult>;
 }
 
+/** Retrieval strategy for `CorpusEngine.search` (#1599, #1601). */
+export type CorpusSearchMode = 'bm25' | 'semantic' | 'hybrid';
+
 export interface CorpusSearchRequest {
   query: string;
   sourceType?: SourceType;
@@ -124,6 +127,13 @@ export interface CorpusSearchRequest {
    * silently falling back to the live index.
    */
   ref?: string;
+  /**
+   * Force a retrieval strategy (#1599, #1601). Defaults to `hybrid` when a
+   * PGX embedder is configured, `bm25` otherwise. Always downgraded to
+   * `bm25` for a `ref`-pinned query, regardless of this field — see
+   * `CorpusEngine.search`.
+   */
+  mode?: CorpusSearchMode;
 }
 
 export interface CorpusSearchHit {
@@ -169,6 +179,15 @@ export interface CorpusSearchResult {
   tokensUsed: number;
   /** Present only when the request was pinned to a `ref`. */
   provenance?: CorpusSearchProvenance;
+  /** Retrieval strategy actually used to produce `results` (#1599, #1601). */
+  mode: CorpusSearchMode;
+  /**
+   * Present only when a requested capability couldn't run and the response
+   * silently fell back instead of erroring — e.g. `['semantic']` when PGX
+   * embedding failed and results are BM25-only, or `['rerank']` when the
+   * PGX reranker was unavailable but semantic retrieval still ran.
+   */
+  degraded?: ('semantic' | 'rerank')[];
 }
 
 /** Ingestion-attestation counters (#1750) surfaced on `GET /corpus/:did/status`. */
@@ -180,6 +199,8 @@ export interface CorpusAttestationStats {
 export interface CorpusStatus {
   sources: CorpusSourceFreshness[];
   threadCount: number;
+  /** Embedding chunks awaiting (or re-awaiting, after a failed attempt) a PGX embed pass (#1599, #1601). */
+  pendingEmbeddings: number;
   attestations: CorpusAttestationStats;
 }
 

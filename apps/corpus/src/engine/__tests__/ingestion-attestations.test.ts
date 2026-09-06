@@ -69,23 +69,23 @@ describe('CorpusEngine ingestion attestations (#1750)', () => {
     restoreEnv();
   });
 
-  it('ingest succeeds and returns no attestationId when no corpus identity is configured', () => {
+  it('ingest succeeds and returns no attestationId when no corpus identity is configured', async () => {
     const result = engine.ingest('did:example:alice', [doc()]);
     expect(result).toEqual({ ingested: 1 });
 
-    const search = engine.search('did:example:alice', { query: 'Title' });
+    const search = await engine.search('did:example:alice', { query: 'Title' });
     expect(search.results[0].attestationId).toBeUndefined();
 
     const status = engine.status('did:example:alice');
     expect(status.attestations).toEqual({ total: 0, pendingForward: 0 });
   });
 
-  it('signs and persists an attestation, and surfaces attestationId on the matching search hit', () => {
+  it('signs and persists an attestation, and surfaces attestationId on the matching search hit', async () => {
     setCorpusIdentityEnv();
 
     engine.ingest('did:example:alice', [doc({ id: '1', title: 'Signed doc' })], undefined, 'did:example:ingester');
 
-    const search = engine.search('did:example:alice', { query: 'Signed' });
+    const search = await engine.search('did:example:alice', { query: 'Signed' });
     expect(search.results).toHaveLength(1);
     const attestationId = search.results[0].attestationId;
     expect(attestationId).toBeDefined();
@@ -101,11 +101,11 @@ describe('CorpusEngine ingestion attestations (#1750)', () => {
     expect(view.corpusPublicKey).toBe(CORPUS_KEYPAIR.publicKey);
   });
 
-  it('throws AttestationNotFoundError for an unknown id, and for an id that exists under a different DID', () => {
+  it('throws AttestationNotFoundError for an unknown id, and for an id that exists under a different DID', async () => {
     setCorpusIdentityEnv();
     engine.ingest('did:example:alice', [doc({ id: '1' })]);
 
-    const search = engine.search('did:example:alice', { query: 'Title' });
+    const search = await engine.search('did:example:alice', { query: 'Title' });
     const attestationId = search.results[0].attestationId as string;
 
     expect(() => engine.getAttestation('did:example:alice', 'ing_does_not_exist')).toThrow(AttestationNotFoundError);
