@@ -61,12 +61,16 @@ The protocol doesn't require the token. The token requires the protocol.
 
 The matrix is the substrate's **vocabulary** — the verbs any intent resolves to, the same whether the actor is a person, a family, or a community. The agent doesn't invent capabilities; it composes these cells on your behalf. Every problem the protocol solves is a cell; every service in this repo implements cells.
 
-|  | Attestation | Communication | Attribution | Settlement | Discovery |
-|--|-------------|---------------|-------------|------------|-----------|
-| **Actor** | Credentials, reputation | Direct messaging | Personal .fair manifests | Payments, tips | Profile, presence |
-| **Family** | Custodial consent | Shared channels | Shared attribution | Shared resources | Family node |
-| **Community** | Governance weight | Scoped forums | Collective .fair | Quorum settlement | Federated registry |
-| **Business** | Reviews, compliance | Commercial messaging | Product attribution | Transaction fees | Marketplace listing |
+Revocation's force points at *other* sentences in the record (it acts on validity, not on the world) rather than at the world the way Attestation, Communication, Attribution, Settlement, and Discovery do. It is still gridded into a cell per scope below — each cell is marked **named** rather than described: the canonical seat is set, the build waits for the use case that forces it.
+
+|  | Attestation | Communication | Attribution | Settlement | Discovery | Revocation |
+|--|-------------|---------------|-------------|------------|-----------|------------|
+| **Actor** | Credentials, reputation | Direct messaging | Personal .fair manifests | Payments, tips | Profile, presence | Named — canonical seat |
+| **Family** | Custodial consent | Shared channels | Shared attribution | Shared resources | Family node | Named — canonical seat |
+| **Community** | Governance weight | Scoped forums | Collective .fair | Quorum settlement | Federated registry | Named — canonical seat |
+| **Business** | Reviews, compliance | Commercial messaging | Product attribution | Transaction fees | Marketplace listing | Named — canonical seat |
+
+**Revocation** — the option to leave. Withdraw → soft (tombstone) → hard (destroy hash/key, keep the tombstone): the record remembers *that*, destruction erases *what*. Propagation is part of the primitive; revocation without propagation is theater. Named ahead of the lived experience — the seat is canon, the build waits for the use case that forces it.
 
 ### Proof of history, not proof of work
 
@@ -286,7 +290,7 @@ See [ENVIRONMENTS.md](./docs/ENVIRONMENTS.md) for full deployment topology.
 
 | Document | Purpose |
 |----------|---------|
-| [MJN Whitepaper](./docs/mjn-whitepaper.md) | Protocol specification — 4 scopes x 5 primitives |
+| [MJN Whitepaper](./docs/mjn-whitepaper.md) | Protocol specification — 4 scopes x 6 primitives |
 | [Developer Guide](./docs/DEVELOPER.md) | Getting started — quickstart, env vars, local dev |
 | [Environments](./docs/ENVIRONMENTS.md) | Database & deployment config |
 | [Migrations](./docs/MIGRATIONS.md) | Database migration system |

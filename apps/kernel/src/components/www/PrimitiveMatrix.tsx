@@ -1,8 +1,18 @@
 'use client';
 
+import type { MatrixCell } from './matrix';
+
 const SCOPES = ['Actor', 'Family', 'Community', 'Business'];
-const PRIMITIVES = ['Attestation', 'Communication', 'Attribution', 'Settlement', 'Discovery'];
+const PRIMITIVES = ['Attestation', 'Communication', 'Attribution', 'Settlement', 'Discovery', 'Revocation'];
 const SCOPE_ICONS = ['◆', '◇', '○', '□'];
+
+// Diagonal hatch, distinct from the amber completion gradient below — a
+// 'named' cell (#2027, Revocation) is not an ordinary 0%, unstarted-backlog
+// cell: the primitive's canonical seat is ruled and stable, the build just
+// waits on the forcing use case.
+const NAMED_CELL_BG =
+  'repeating-linear-gradient(45deg, rgba(148,163,184,0.16) 0, rgba(148,163,184,0.16) 3px, transparent 3px, transparent 7px)';
+const NAMED_STATUS_LABEL = 'named — canonical seat, build awaits the forcing use case';
 
 function barBg(pct: number): string {
   if (pct === 0) return 'transparent';
@@ -18,8 +28,21 @@ function glowClass(pct: number): string {
   return '';
 }
 
+function cellBackground(cell: MatrixCell | undefined): string {
+  if (cell?.status === 'named') return NAMED_CELL_BG;
+  const pct = cell?.percent ?? 0;
+  return pct > 0
+    ? `linear-gradient(to right, ${barBg(pct)} ${pct}%, rgba(255,255,255,0.03) ${pct}%)`
+    : 'rgba(255,255,255,0.03)';
+}
+
+function cellTitle(scope: string, primitive: string, cell: MatrixCell | undefined): string {
+  if (cell?.status === 'named') return `${scope} × ${primitive}: ${NAMED_STATUS_LABEL}`;
+  return `${scope} × ${primitive}: ${cell?.percent ?? 0}%`;
+}
+
 interface PrimitiveMatrixProps {
-  cells: Record<string, number>;
+  cells: Record<string, MatrixCell>;
   overall: number;
 }
 
@@ -32,7 +55,7 @@ export function PrimitiveMatrix({ cells, overall }: Readonly<PrimitiveMatrixProp
         style={{ gridTemplateColumns: `100px repeat(${PRIMITIVES.length}, 1fr)` }}
       >
         <div /> {/* empty corner */}
-        {PRIMITIVES.map((col, ci) => (
+        {PRIMITIVES.map((col) => (
           <div key={col} className="flex justify-center h-20 text-white/50">
             <span
               className="text-[10px] uppercase tracking-wider font-medium whitespace-nowrap origin-center"
@@ -58,19 +81,16 @@ export function PrimitiveMatrix({ cells, overall }: Readonly<PrimitiveMatrixProp
           </div>
 
           {/* Cells — horizontal fill left to right */}
-          {PRIMITIVES.map((primitive, ci) => {
+          {PRIMITIVES.map((primitive) => {
             const key = `${scope}×${primitive}`;
-            const pct = cells[key] ?? 0;
+            const cell = cells[key];
+            const isNamed = cell?.status === 'named';
             return (
               <div
                 key={`${scope}-${primitive}`}
-                className={`h-10 rounded-sm border border-white/10 ${glowClass(pct)}`}
-                title={`${scope} × ${primitive}: ${pct}%`}
-                style={{
-                  background: pct > 0
-                    ? `linear-gradient(to right, ${barBg(pct)} ${pct}%, rgba(255,255,255,0.03) ${pct}%)`
-                    : 'rgba(255,255,255,0.03)',
-                }}
+                className={`h-10 rounded-sm border ${isNamed ? 'border-dashed border-white/25' : 'border-white/10'} ${isNamed ? '' : glowClass(cell?.percent ?? 0)}`}
+                title={cellTitle(scope, primitive, cell)}
+                style={{ background: cellBackground(cell) }}
               />
             );
           })}

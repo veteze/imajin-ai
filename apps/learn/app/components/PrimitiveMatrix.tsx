@@ -3,7 +3,10 @@
 import { useEffect, useState } from 'react';
 
 const ROWS = ['Actor', 'Family', 'Community', 'Business'];
-const COLS = ['Attestation', 'Communication', 'Attribution', 'Settlement', 'Discovery'];
+// Revocation (#2027) appended at the end so existing lesson content's
+// 0-indexed [row, col] active-cell pairs for the first five columns keep
+// pointing at the same primitive.
+const COLS = ['Attestation', 'Communication', 'Attribution', 'Settlement', 'Discovery', 'Revocation'];
 
 const ROW_ICONS = ['◆', '◇', '○', '□'];
 

@@ -863,6 +863,13 @@ Academically validated by a 2025 Springer philosophy paper proving the current a
 - RFC-0002 (did:mjn Method) updated: typed DIDs with scope in DID Document
 - README updated with scopes × primitives matrix
 
+> **Editorial note (docs updated 2026-09-05):** The "5 primitives" / "4 identity scopes × 5 primitives"
+> counts above were accurate when this entry was written. Revocation was ruled a first-class
+> primitive on 2026-08-14, making the grammar **six** primitives (Attestation · Communication ·
+> Attribution (.fair) · Settlement · Discovery · Revocation). This entry is left as originally
+> written rather than silently rewritten — the record remembers *that* the count changed, not a
+> revised history. See #2027.
+
 ### 📚 Learn + Pitch Deck — SHIPPED
 
 - Interactive primitive matrix component for slide rendering

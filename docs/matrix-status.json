@@ -1,6 +1,10 @@
 {
-  "version": "2026-03-25",
+  "version": "2026-09-05",
   "note": "Curated assessment of protocol implementation status. Updated manually.",
+  "statusLegend": {
+    "percent": "0-100 completion for a cell under active or backlog build work. The default status when a cell omits the 'status' field.",
+    "named": "The primitive's canonical seat is ruled and stable (Revocation, #2027), but no build work exists yet because no forcing use case has arrived. Distinct from an ordinary 0% backlog cell, which is simply unstarted: 'named' cells are not scheduled, not missing, not planned — they are seated in the grammar and waiting on the use case that forces the build. percent stays 0 for a named cell until real work begins, at which point 'status' is dropped."
+  },
   "scopes": [
     "Actor",
     "Family",
@@ -12,7 +16,8 @@
     "Communication",
     "Attribution",
     "Settlement",
-    "Discovery"
+    "Discovery",
+    "Revocation"
   ],
   "cells": {
     "Actor×Attestation": {
@@ -274,6 +279,38 @@
         "Location-based discovery",
         "k-anonymity for declaration matching",
         "AttMart implementation (#338)"
+      ]
+    },
+    "Actor×Revocation": {
+      "percent": 0,
+      "status": "named",
+      "done": [],
+      "remaining": [
+        "Canonical seat ruled 2026-08-14 (#2027) — implementation waits for the use case that forces it"
+      ]
+    },
+    "Family×Revocation": {
+      "percent": 0,
+      "status": "named",
+      "done": [],
+      "remaining": [
+        "Canonical seat ruled 2026-08-14 (#2027) — implementation waits for the use case that forces it"
+      ]
+    },
+    "Community×Revocation": {
+      "percent": 0,
+      "status": "named",
+      "done": [],
+      "remaining": [
+        "Canonical seat ruled 2026-08-14 (#2027) — implementation waits for the use case that forces it"
+      ]
+    },
+    "Business×Revocation": {
+      "percent": 0,
+      "status": "named",
+      "done": [],
+      "remaining": [
+        "Canonical seat ruled 2026-08-14 (#2027) — implementation waits for the use case that forces it"
       ]
     }
   }

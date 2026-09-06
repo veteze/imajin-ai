@@ -135,9 +135,9 @@ system doesn't care if you're carbon or silicon — it cares if you can sign.
 
 ---
 
-## The Five Primitives
+## The Six Primitives
 
-Everything in MJN reduces to five primitives. They compose. Each is independently useful.
+Everything in MJN reduces to six primitives. They compose. Each is independently useful.
 Together they form the operating system.
 
 ### 1. Attestation
@@ -247,6 +247,25 @@ the user experience; enforcement mode makes it binding.
 **Exit credentials:** On departure, Actors receive a signed portable credential — public
 summary (aggregate stats) and encrypted context (full attestation history under departing
 Actor's key). Integrity is provable because signing started at onboarding, not at departure.
+
+### 6. Revocation
+
+The option to leave. Attestation, Communication, Attribution, Settlement, and Discovery each
+assert into the record; Revocation is the only primitive whose force is directed at *other*
+sentences in the record — it acts on validity, not on the world.
+
+**Tiered destruction:**
+1. **Withdraw** — stop future participation. The past stands.
+2. **Soft (tombstone)** — the record is marked invalid; the shape stays visible, the content doesn't speak for itself anymore.
+3. **Hard** — destroy the underlying hash/key. The tombstone remains; what it protected doesn't. The record remembers *that* something was revoked. Destruction erases *what*.
+
+**Propagation is part of the primitive.** A revocation that doesn't reach every node holding
+a copy of the attestation is theater, not revocation.
+
+Ruled a first-class primitive on 2026-08-14 — not a sub-case of Attestation. Named ahead of
+the lived experience: the canonical seat in the grammar is set now; the concrete
+implementation (tombstone schema, propagation transport, hard-destroy key handling) waits
+for the use case that forces it.
 
 ---
 
