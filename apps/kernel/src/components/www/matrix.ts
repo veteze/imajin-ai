@@ -15,9 +15,12 @@
  */
 export type CellStatus = 'named';
 
+// The raw JSON's `status` field widens to `string` under `resolveJsonModule`
+// (it isn't declared `as const`), so it can't be typed as the `CellStatus`
+// literal union directly — normalizeStatus() below narrows it instead.
 interface MatrixStatusCell {
   percent: number;
-  status?: CellStatus;
+  status?: string;
 }
 
 export interface MatrixStatus {
@@ -34,10 +37,14 @@ export interface MatrixProps {
   overall: number;
 }
 
+function normalizeStatus(status: string | undefined): CellStatus | undefined {
+  return status === 'named' ? 'named' : undefined;
+}
+
 export function toMatrixProps(data: MatrixStatus): MatrixProps {
   const entries = Object.entries(data.cells);
   const cells = Object.fromEntries(
-    entries.map(([key, value]) => [key, { percent: value.percent, status: value.status }]),
+    entries.map(([key, value]) => [key, { percent: value.percent, status: normalizeStatus(value.status) }]),
   );
   const overall = Math.round(
     entries.reduce((sum, [, value]) => sum + value.percent, 0) / entries.length,
