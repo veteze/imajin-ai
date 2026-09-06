@@ -67,6 +67,18 @@ export function buildNotificationFrame(input: {
  * which are the same outcome for the caller: the row is still there to be read.
  *
  * Never throws.
+ *
+ * ## Observability (2026-09-05 incident)
+ * The "nobody was listening" branch (`res.ok` but `delivered: false`) used to
+ * be entirely silent — no log line at all, unlike the error branches below —
+ * so a run that completed while the owner's socket happened to be briefly
+ * disconnected left no trace of *why* the live push never reached them
+ * (the notification row itself is unaffected; only the WS leg is silent).
+ * That branch now gets a `warn`, and `GET /notify/api/health` surfaces a
+ * rolling count of `inapp`-eligible notifications that missed their WS leg
+ * (`recentWsPushMisses`, backed by `channelsSent` on the `notifications`
+ * row already written in `/notify/api/send`) so a miss is visible on an
+ * existing health surface without grepping logs across instances.
  */
 export async function pushNotificationToDid(
   recipientDid: string,
@@ -93,7 +105,14 @@ export async function pushNotificationToDid(
     }
 
     const data = await res.json();
-    return data.delivered ?? false;
+    const delivered: boolean = data.delivered ?? false;
+    if (!delivered) {
+      log.warn(
+        { id: frame.id, recipientDid },
+        'Notification WS push found no connected socket for recipient',
+      );
+    }
+    return delivered;
   } catch (err) {
     log.error({ id: frame.id, err: String(err) }, 'Notification WS push error');
     return false;

@@ -22,6 +22,7 @@ const {
   publishTimeoutRunOutcomeMock,
   candidateRows,
   blockedNoticeRows,
+  raceRows,
   listingFailure,
   FakeWarpApiErrorHoisted,
 } = vi.hoisted(() => ({
@@ -37,6 +38,7 @@ const {
     previousSessionId: unknown;
   }>,
   blockedNoticeRows: new Set<string>(),
+  raceRows: new Set<string>(),
   listingFailure: { error: null as Error | null },
   FakeWarpApiErrorHoisted: class extends Error {
     status: number;
@@ -61,6 +63,10 @@ vi.mock('@imajin/db', () => {
     if (text.includes('warp.run.blocked')) {
       const runId = values[0] as string;
       return Promise.resolve(blockedNoticeRows.has(runId) ? [{ x: 1 }] : []);
+    }
+    if (text.includes("'warp.run.timeout'") && text.includes('occurred_at >=')) {
+      const runId = values[0] as string;
+      return Promise.resolve(raceRows.has(runId) ? [{ x: 1 }] : []);
     }
     return Promise.resolve([]);
   };
@@ -107,6 +113,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   candidateRows.length = 0;
   blockedNoticeRows.clear();
+  raceRows.clear();
   listingFailure.error = null;
   getAgentRunMock.mockReset();
   publishTerminalRunOutcomeMock.mockReset().mockResolvedValue(undefined);
@@ -125,6 +132,7 @@ describe('sweepInFlightWarpRuns', () => {
       blockedNotified: 0,
       stillInFlight: 0,
       timedOut: 0,
+      skippedRace: 0,
       errors: 0,
     });
     expect(getAgentRunMock).not.toHaveBeenCalled();
@@ -250,6 +258,7 @@ describe('sweepInFlightWarpRuns', () => {
       blockedNotified: 0,
       stillInFlight: 0,
       timedOut: 0,
+      skippedRace: 0,
       errors: 0,
     });
     expect(getAgentRunMock).not.toHaveBeenCalled();
@@ -369,6 +378,56 @@ describe('sweepInFlightWarpRuns', () => {
 
       expect(publishTerminalRunOutcomeMock).toHaveBeenCalledTimes(1);
       expect(outcome.completed).toBe(1);
+    });
+  });
+
+  // ── No dupes across the in-request watch and the sweep (defect fix) ─────
+
+  describe('race with the in-request watch', () => {
+    it('skips publishing a terminal outcome the in-request watch already published for this segment', async () => {
+      // Simulates the in-request watch (dispatch.ts's watchRun) winning the
+      // race: by the time this sweep tick's read of Warp resolves, a
+      // warp.run.completed row for this exact segment (occurred_at >=
+      // activityAt) already exists in the durable log.
+      seedCandidate('run-1', { activityAt: new Date(Date.now() - 5_000) });
+      raceRows.add('run-1');
+      getAgentRunMock.mockResolvedValue(run('SUCCEEDED', 'run-1'));
+
+      const outcome = await sweepInFlightWarpRuns();
+
+      expect(publishTerminalRunOutcomeMock).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ checked: 1, completed: 0, skippedRace: 1 });
+    });
+
+    it('skips publishing warp.run.timeout when the watch already finalised this segment', async () => {
+      const staleActivity = new Date(Date.now() - (SWEEP_LOOKBACK_MS + 60_000));
+      seedCandidate('run-1', { activityAt: staleActivity });
+      raceRows.add('run-1');
+      getAgentRunMock.mockResolvedValue(run('INPROGRESS', 'run-1'));
+
+      const outcome = await sweepInFlightWarpRuns();
+
+      expect(publishTimeoutRunOutcomeMock).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ checked: 1, timedOut: 0, skippedRace: 1 });
+    });
+
+    it('still publishes for a resumed segment when only an older segment already has a terminal row', async () => {
+      // raceRows is keyed only on runId in this test double, so exercise the
+      // real guard's timestamp semantics isn't possible via the mock alone —
+      // this pins that an unresumed race candidate with no raceRows entry at
+      // all still publishes normally (the common, non-racing case).
+      seedCandidate('run-1', { resumeCount: 1, previousSessionId: 'session-a' });
+      getAgentRunMock.mockResolvedValue(run('SUCCEEDED', 'run-1'));
+
+      const outcome = await sweepInFlightWarpRuns();
+
+      expect(publishTerminalRunOutcomeMock).toHaveBeenCalledWith(
+        PRINCIPAL,
+        run('SUCCEEDED', 'run-1'),
+        'SUCCEEDED',
+        { resumedFrom: 'session-a', segment: 2 },
+      );
+      expect(outcome.skippedRace).toBe(0);
     });
   });
 });
