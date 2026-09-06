@@ -15,7 +15,7 @@ The supply-as-receipt architecture that emerged out of Catalyst — a correlatio
 This RFC makes two claims:
 
 1. **One receipt grammar.** Events, market, coffee, learn, and supply are five configurations of the same verb set. Each verb mints a signed artifact; the chain is the product. Verticals stop owning bespoke schemas and become `bus_chain_configs` rows plus domain state ("it's all becoming configuration").
-2. **The kernel sheds its verticals.** Once the grammar is kernel-level, market, events, coffee, and learn have no reason to live inside the kernel. They step out as external services composing the public app surface (`requireAppAuth`) — the boundary Catalyst already proved arms-length (#799). The kernel keeps the five primitives (attestation, communication, attribution, settlement, discovery), the bus/reactor substrate, and the receipt grammar itself.
+2. **The kernel sheds its verticals.** Once the grammar is kernel-level, market, events, coffee, and learn have no reason to live inside the kernel. They step out as external services composing the public app surface (`requireAppAuth`) — the boundary Catalyst already proved arms-length (#799). The kernel keeps the six primitives (attestation, communication, attribution, settlement, discovery, revocation), the bus/reactor substrate, and the receipt grammar itself.
 
 ## Falsifiable claim
 
@@ -80,7 +80,7 @@ Proposal: promote the countersign layer to the kernel — a pending-signatures s
 Current `apps/`: broker-agent, coffee, corpus, dykil, events, kernel, learn, links, market. Under this RFC:
 
 - **Step out as external services** (composing via `requireAppAuth`, exactly like `catalyst-power/xprize`): **market, events, coffee, learn.** Each has a transactional component that becomes a receipt-grammar configuration; none needs kernel-internal access once the grammar and the countersign layer are kernel-level.
-- **Stays kernel:** the five primitives, identity/auth, pay/settlement, chat, media, connections, the bus/reactor substrate, the receipt grammar, the countersign layer, inference.
+- **Stays kernel:** the six primitives, identity/auth, pay/settlement, chat, media, connections, the bus/reactor substrate, the receipt grammar, the countersign layer, inference.
 - **Why this is the honest architecture:** the kernel becomes a neutral substrate whose *own* verticals are arms-length conformance consumers of the same public surface offered to third parties. We pass our own suite. Catalyst proved the boundary holds for an external org; extraction proves it holds for us.
 
 **dykil is the open case.** It is a service other services consume, so pulling it out forces the service-to-service composition question — how does an extracted service share with another extracted service without both round-tripping through the kernel? Two candidate answers:

@@ -131,7 +131,7 @@ export default async function ProjectPage() {
         <div className="text-center mb-8">
           <h2 className="text-xl font-semibold text-gray-200 mb-2">The Protocol Matrix</h2>
           <p className="text-sm text-gray-500">
-            4 scopes × 5 primitives. Every problem is a cell. The protocol is the matrix.
+            4 scopes × 6 primitives. Every problem is a cell. The protocol is the matrix.
           </p>
         </div>
         <PrimitiveMatrix {...toMatrixProps(matrixData)} />
