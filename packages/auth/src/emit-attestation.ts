@@ -1,6 +1,49 @@
 import { createLogger } from '@imajin/logger';
 const log = createLogger('auth');
 
+let deprecatedKeyWarned = false;
+let forwardFailureCount = 0;
+
+/**
+ * Resolves the shared secret used to authenticate the service-to-service
+ * calls below to the kernel's attestation routes
+ * (`/api/attestations/internal`, `/api/attestations/chain-emit`) — both
+ * routes check `ATTESTATION_INTERNAL_API_KEY` exclusively. `AUTH_INTERNAL_API_KEY`
+ * is accepted as a deprecated fallback for one release (#2037: the two names
+ * had drifted apart, so this file sent a key neither route ever checked and
+ * every mechanical attestation forward was silently rejected). Warns once
+ * per process — not once per call — so a misconfigured deployment shows up
+ * without spamming the logs.
+ */
+function resolveInternalApiKey(): string | undefined {
+  const canonical = process.env.ATTESTATION_INTERNAL_API_KEY;
+  if (canonical) return canonical;
+
+  const legacy = process.env.AUTH_INTERNAL_API_KEY;
+  if (legacy && !deprecatedKeyWarned) {
+    deprecatedKeyWarned = true;
+    console.warn(
+      '[auth] AUTH_INTERNAL_API_KEY is deprecated for attestation forwarding (#2037) — set ATTESTATION_INTERNAL_API_KEY instead. This fallback will be removed in a future release.',
+    );
+  }
+  return legacy;
+}
+
+/**
+ * Count of attestation-forward requests (the internal write or the
+ * chain-emit fan-out) that received a non-2xx response since process start.
+ * Surfaced on `/auth/api/health` (#2037) so a 100% reject rate — e.g. from a
+ * misconfigured internal API key — can't hide silently again.
+ */
+export function getAttestationForwardFailureCount(): number {
+  return forwardFailureCount;
+}
+
+/** Test-only escape hatch: the module-level counter survives across calls on purpose. */
+export function _resetAttestationForwardFailureCountForTests(): void {
+  forwardFailureCount = 0;
+}
+
 export async function emitAttestation(params: {
   issuer_did: string;
   subject_did: string;
@@ -27,9 +70,9 @@ export async function emitAttestation(params: {
   originUrl?: string;
 }): Promise<void> {
   const authServiceUrl = process.env.AUTH_SERVICE_URL;
-  const internalApiKey = process.env.AUTH_INTERNAL_API_KEY;
+  const internalApiKey = resolveInternalApiKey();
   if (!authServiceUrl || !internalApiKey) {
-    log.warn({}, 'Attestation skipped: AUTH_SERVICE_URL or AUTH_INTERNAL_API_KEY not set');
+    log.warn({}, 'Attestation skipped: AUTH_SERVICE_URL or ATTESTATION_INTERNAL_API_KEY not set');
     return;
   }
 
@@ -45,8 +88,13 @@ export async function emitAttestation(params: {
       body: JSON.stringify(params),
     });
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      log.error({ type: params.type, status: res.status, text }, `Attestation (${params.type}) failed`);
+      forwardFailureCount += 1;
+      // Never log the key itself — status + route is enough to diagnose an
+      // auth mismatch (#2037) without leaking the secret into logs.
+      log.warn(
+        { type: params.type, status: res.status, route: '/api/attestations/internal' },
+        `Attestation (${params.type}) forward rejected`,
+      );
       return;
     }
     // Capture issuedAt from the response for accurate chain timestamp
@@ -67,6 +115,13 @@ export async function emitAttestation(params: {
       Authorization: `Bearer ${internalApiKey}`,
     },
     body: JSON.stringify({ ...params, issued_at: issuedAt }),
+  }).then((res) => {
+    if (res.ok) return;
+    forwardFailureCount += 1;
+    log.warn(
+      { type: params.type, status: res.status, route: '/api/attestations/chain-emit' },
+      `Attestation chain-emit (${params.type}) rejected`,
+    );
   }).catch((err: unknown) => {
     log.warn({ err: String(err), type: params.type }, `Attestation chain-emit (${params.type}) error`);
   });

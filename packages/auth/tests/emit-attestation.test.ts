@@ -1,19 +1,29 @@
 /**
- * `emitAttestation()` (#1820) — verifies `pending` and `originUrl` are
- * threaded into the POST body sent to the internal attestations route.
- * Both are optional and, when omitted, simply aren't present on the body
- * (the internal route defaults `pendingSignature` to false server-side).
+ * `emitAttestation()` (#1820, #2037):
+ * - verifies `pending` and `originUrl` are threaded into the POST body sent
+ *   to the internal attestations route. Both are optional and, when
+ *   omitted, simply aren't present on the body (the internal route defaults
+ *   `pendingSignature` to false server-side).
+ * - verifies the internal API key resolution (#2037): `ATTESTATION_INTERNAL_API_KEY`
+ *   is canonical and matches what the kernel's routes actually check;
+ *   `AUTH_INTERNAL_API_KEY` is accepted as a deprecated one-release
+ *   fallback, warning once. A rejected (non-2xx) forward is logged at warn
+ *   with status + route, never the key, and increments the exported
+ *   forward-failure counter.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('@imajin/logger', () => ({
-  createLogger: () => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn() }),
+const mocks = vi.hoisted(() => ({
+  log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
-import { emitAttestation } from '../src/emit-attestation';
+vi.mock('@imajin/logger', () => ({
+  createLogger: () => mocks.log,
+}));
 
 const AUTH_SERVICE_URL = 'https://auth.kernel.test';
-const INTERNAL_API_KEY = 'internal-key';
+const ATTESTATION_KEY = 'attestation-internal-key';
+const LEGACY_KEY = 'legacy-auth-internal-key';
 
 function baseParams(overrides: Record<string, unknown> = {}) {
   return {
@@ -31,16 +41,44 @@ function internalRouteBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, 
   return JSON.parse(call![1].body as string) as Record<string, unknown>;
 }
 
+/** Simulates the kernel's real check: only `expectedKey` authenticates, everything else is 401. */
+function fakeKernelFetch(expectedKey: string): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string, init: RequestInit) => {
+    const auth = (init.headers as Record<string, string>).Authorization;
+    if (auth !== `Bearer ${expectedKey}`) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+    if (url.endsWith('/api/attestations/internal')) {
+      return new Response(JSON.stringify({ issuedAt: 'now' }), { status: 201 });
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+}
+
 beforeEach(() => {
+  vi.resetModules();
   vi.clearAllMocks();
+  delete process.env.ATTESTATION_INTERNAL_API_KEY;
+  delete process.env.AUTH_INTERNAL_API_KEY;
   process.env.AUTH_SERVICE_URL = AUTH_SERVICE_URL;
-  process.env.AUTH_INTERNAL_API_KEY = INTERNAL_API_KEY;
+});
+
+afterEach(() => {
+  delete process.env.AUTH_SERVICE_URL;
+  delete process.env.ATTESTATION_INTERNAL_API_KEY;
+  delete process.env.AUTH_INTERNAL_API_KEY;
+  vi.unstubAllGlobals();
 });
 
 describe('emitAttestation pending/originUrl threading (#1820)', () => {
+  beforeEach(() => {
+    process.env.ATTESTATION_INTERNAL_API_KEY = ATTESTATION_KEY;
+  });
+
   it('includes pending: true in the internal route request body when passed', async () => {
+    const { emitAttestation } = await import('../src/emit-attestation');
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ issuedAt: 'now' }), { status: 201 }));
-    global.fetch = fetchMock as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
 
     await emitAttestation(baseParams({ pending: true }));
 
@@ -48,8 +86,9 @@ describe('emitAttestation pending/originUrl threading (#1820)', () => {
   });
 
   it('includes originUrl in the internal route request body when passed', async () => {
+    const { emitAttestation } = await import('../src/emit-attestation');
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ issuedAt: 'now' }), { status: 201 }));
-    global.fetch = fetchMock as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
 
     await emitAttestation(baseParams({ originUrl: 'https://xprize.example.com' }));
 
@@ -57,13 +96,63 @@ describe('emitAttestation pending/originUrl threading (#1820)', () => {
   });
 
   it('omits pending and originUrl from the body when the caller does not supply them', async () => {
+    const { emitAttestation } = await import('../src/emit-attestation');
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ issuedAt: 'now' }), { status: 201 }));
-    global.fetch = fetchMock as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
 
     await emitAttestation(baseParams());
 
     const body = internalRouteBody(fetchMock);
     expect(body.pending).toBeUndefined();
     expect(body.originUrl).toBeUndefined();
+  });
+});
+
+describe('internal API key resolution (#2037)', () => {
+  it('authenticates with the canonical ATTESTATION_INTERNAL_API_KEY and the route accepts the forward', async () => {
+    process.env.ATTESTATION_INTERNAL_API_KEY = ATTESTATION_KEY;
+    const { emitAttestation, getAttestationForwardFailureCount } = await import('../src/emit-attestation');
+    const fetchMock = fakeKernelFetch(ATTESTATION_KEY);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await emitAttestation(baseParams());
+
+    expect(internalRouteBody(fetchMock).issuer_did).toBe('did:imajin:supplier');
+    expect(getAttestationForwardFailureCount()).toBe(0);
+    expect(mocks.log.warn).not.toHaveBeenCalled();
+  });
+
+  it('falls back to AUTH_INTERNAL_API_KEY and still authenticates when ATTESTATION_INTERNAL_API_KEY is unset, warning once per process', async () => {
+    process.env.AUTH_INTERNAL_API_KEY = LEGACY_KEY;
+    const { emitAttestation, getAttestationForwardFailureCount } = await import('../src/emit-attestation');
+    const fetchMock = fakeKernelFetch(LEGACY_KEY);
+    vi.stubGlobal('fetch', fetchMock);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await emitAttestation(baseParams());
+    await emitAttestation(baseParams());
+
+    expect(internalRouteBody(fetchMock).issuer_did).toBe('did:imajin:supplier');
+    expect(getAttestationForwardFailureCount()).toBe(0);
+    // Once per process, not once per call.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toMatch(/AUTH_INTERNAL_API_KEY is deprecated/);
+    warnSpy.mockRestore();
+  });
+
+  it('rejects, logs a warn (status + route, never the key), and increments the failure counter on a mismatched key', async () => {
+    process.env.ATTESTATION_INTERNAL_API_KEY = 'client-key';
+    const { emitAttestation, getAttestationForwardFailureCount } = await import('../src/emit-attestation');
+    const fetchMock = fakeKernelFetch('server-key'); // the route's own key differs from what the client sends
+    vi.stubGlobal('fetch', fetchMock);
+
+    await emitAttestation(baseParams());
+
+    expect(getAttestationForwardFailureCount()).toBe(1);
+    expect(mocks.log.warn).toHaveBeenCalledTimes(1);
+    const [meta] = mocks.log.warn.mock.calls[0];
+    expect(meta).toMatchObject({ status: 401, route: '/api/attestations/internal' });
+    expect(JSON.stringify(meta)).not.toContain('client-key');
+    expect(JSON.stringify(meta)).not.toContain('server-key');
   });
 });
