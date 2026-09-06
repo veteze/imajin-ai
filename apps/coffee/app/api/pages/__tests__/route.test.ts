@@ -7,17 +7,33 @@
  * handler and the real (unmocked) `buildFairManifest`, so the resulting
  * `.fair` chain is asserted end-to-end rather than just unit-testing
  * `getNodeSelf()` in isolation.
+ *
+ * Shared mock plumbing and .fair chain fixtures/assertions live in
+ * packages/fair/src/test-helpers.ts — see that file for why.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  REGISTRY_NODE_SELF,
+  expectRegistrySourcedShares,
+  expectDefaultShares,
+  silentLoggerFactory,
+  resolveActingDidMock,
+  jsonResponseMock,
+  errorResponseMock,
+  makeJsonRequest,
+  echoLastInsertedValue,
+} from '../../../../../../packages/fair/src/test-helpers';
 
-// ─── Mocks ──────────────────────────────────────────────────────────────────
+// ─── Mocks ────────────────────────────────────────────────────────────────
 
+// vi.hoisted() runs before regular imports are live, so its callback can
+// only reference other vi.hoisted()/vi.mock() values — the shared
+// createInsertChainMocks() helper is used elsewhere but not here.
 const mocks = vi.hoisted(() => {
-  const findFirstMock = vi.fn();
   const returningMock = vi.fn();
   const valuesMock = vi.fn(() => ({ returning: returningMock }));
   const insertMock = vi.fn(() => ({ values: valuesMock }));
-
+  const findFirstMock = vi.fn();
   const requireAuthMock = vi.fn();
   const getNodeSelfMock = vi.fn();
   // Raw postgres client — only reached for the (unrelated) forest_config scope lookup.
@@ -26,9 +42,7 @@ const mocks = vi.hoisted(() => {
   return { findFirstMock, returningMock, valuesMock, insertMock, requireAuthMock, getNodeSelfMock, sqlMock };
 });
 
-vi.mock('@imajin/logger', () => ({
-  createLogger: vi.fn(() => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() })),
-}));
+vi.mock('@imajin/logger', () => silentLoggerFactory());
 
 vi.mock('@/db', () => ({
   db: {
@@ -40,8 +54,7 @@ vi.mock('@/db', () => ({
 
 vi.mock('@imajin/auth', () => ({
   requireAuth: mocks.requireAuthMock,
-  resolveActingDid: (identity: { actingFor?: string; actingAs?: string | null; id: string }) =>
-    identity.actingFor ?? identity.actingAs ?? identity.id,
+  resolveActingDid: resolveActingDidMock,
 }));
 
 vi.mock('@imajin/db', () => ({
@@ -53,8 +66,8 @@ vi.mock('@imajin/config', () => ({
 }));
 
 vi.mock('@/lib/utils', () => ({
-  jsonResponse: (data: unknown, status = 200) => Response.json(data, { status }),
-  errorResponse: (error: string, status = 400) => Response.json({ error }, { status }),
+  jsonResponse: jsonResponseMock,
+  errorResponse: errorResponseMock,
   isValidHandle: (handle: string) => /^[a-z0-9_]{3,30}$/.test(handle),
   generateId: (prefix: string) => `${prefix}_test123`,
 }));
@@ -66,16 +79,11 @@ vi.mock('@/lib/utils', () => ({
 // ─── Subject ────────────────────────────────────────────────────────────────
 
 import { POST } from '../route';
-import { REGISTRY_NODE_SELF, expectRegistrySourcedShares, expectDefaultShares } from '../../../../../../packages/fair/src/test-helpers';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function makeRequest(body: Record<string, unknown>): Parameters<typeof POST>[0] {
-  return new Request('https://coffee.test/api/pages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }) as Parameters<typeof POST>[0];
+  return makeJsonRequest('https://coffee.test/api/pages', 'POST', body) as Parameters<typeof POST>[0];
 }
 
 const VALID_BODY = {
@@ -91,10 +99,7 @@ describe('POST /api/pages (#2000: node config sourced via getNodeSelf())', () =>
     vi.clearAllMocks();
     mocks.findFirstMock.mockReset().mockResolvedValue(undefined);
     mocks.sqlMock.mockReset().mockResolvedValue([]);
-    mocks.returningMock.mockImplementation(async () => {
-      const inserted = mocks.valuesMock.mock.calls.at(-1)?.[0];
-      return [inserted];
-    });
+    mocks.returningMock.mockImplementation(echoLastInsertedValue(mocks.valuesMock));
     mocks.requireAuthMock.mockResolvedValue({
       identity: { id: 'did:imajin:creator', actingAs: null },
     });

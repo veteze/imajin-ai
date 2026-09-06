@@ -4,11 +4,28 @@
  * See apps/coffee/app/api/pages/__tests__/route.test.ts for the rationale:
  * these exercise the getNodeSelf() → buildFairManifest() branches (#2000)
  * through the real POST handler and the real (unmocked) buildFairManifest.
+ *
+ * Shared mock plumbing and .fair chain fixtures/assertions live in
+ * packages/fair/src/test-helpers.ts — see that file for why.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  REGISTRY_NODE_SELF,
+  expectRegistrySourcedShares,
+  expectDefaultShares,
+  resolveActingDidMock,
+  passthroughMediaRefFactory,
+  jsonResponseMock,
+  errorResponseMock,
+  makeJsonRequest,
+  echoLastInsertedValue,
+} from '../../../../../../packages/fair/src/test-helpers';
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
+// vi.hoisted() runs before regular imports are live, so its callback can
+// only reference other vi.hoisted()/vi.mock() values — the shared
+// createInsertChainMocks() helper is used elsewhere but not here.
 const mocks = vi.hoisted(() => {
   const returningMock = vi.fn();
   const valuesMock = vi.fn(() => ({ returning: returningMock }));
@@ -24,10 +41,6 @@ const mocks = vi.hoisted(() => {
   return { returningMock, valuesMock, insertMock, requireAuthMock, getSessionMock, getNodeSelfMock, publishMock, sqlMock };
 });
 
-vi.mock('@imajin/logger', () => ({
-  createLogger: vi.fn(() => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() })),
-}));
-
 vi.mock('@/db', () => ({
   db: { insert: mocks.insertMock },
   listings: {},
@@ -36,13 +49,10 @@ vi.mock('@/db', () => ({
 vi.mock('@imajin/auth', () => ({
   requireAuth: mocks.requireAuthMock,
   getSession: mocks.getSessionMock,
-  resolveActingDid: (identity: { actingFor?: string; actingAs?: string | null; id: string }) =>
-    identity.actingFor ?? identity.actingAs ?? identity.id,
+  resolveActingDid: resolveActingDidMock,
 }));
 
-vi.mock('@imajin/media', () => ({
-  resolveMediaRef: (ref: string) => ref,
-}));
+vi.mock('@imajin/media', () => passthroughMediaRefFactory());
 
 vi.mock('@imajin/db', () => ({
   getClient: () => mocks.sqlMock,
@@ -58,8 +68,8 @@ vi.mock('@imajin/bus', () => ({
 
 vi.mock('@/lib/utils', () => ({
   generateId: (prefix: string) => `${prefix}_test123`,
-  jsonResponse: (data: unknown, status = 200) => Response.json(data, { status }),
-  errorResponse: (error: string, status = 400) => Response.json({ error }, { status }),
+  jsonResponse: jsonResponseMock,
+  errorResponse: errorResponseMock,
 }));
 
 // buildFairManifest (@imajin/fair) is intentionally NOT mocked.
@@ -67,16 +77,11 @@ vi.mock('@/lib/utils', () => ({
 // ─── Subject ────────────────────────────────────────────────────────────────
 
 import { POST } from '../route';
-import { REGISTRY_NODE_SELF, expectRegistrySourcedShares, expectDefaultShares } from '../../../../../../packages/fair/src/test-helpers';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function makeRequest(body: Record<string, unknown>): Parameters<typeof POST>[0] {
-  return new Request('https://market.test/api/listings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }) as Parameters<typeof POST>[0];
+  return makeJsonRequest('https://market.test/api/listings', 'POST', body) as Parameters<typeof POST>[0];
 }
 
 const VALID_BODY = {
@@ -92,10 +97,7 @@ describe('POST /api/listings (#2000: node config sourced via getNodeSelf())', ()
     vi.clearAllMocks();
     mocks.sqlMock.mockReset().mockResolvedValue([]);
     mocks.publishMock.mockResolvedValue(undefined);
-    mocks.returningMock.mockImplementation(async () => {
-      const inserted = mocks.valuesMock.mock.calls.at(-1)?.[0];
-      return [inserted];
-    });
+    mocks.returningMock.mockImplementation(echoLastInsertedValue(mocks.valuesMock));
     mocks.requireAuthMock.mockResolvedValue({
       identity: { id: 'did:imajin:seller', actingAs: null },
     });

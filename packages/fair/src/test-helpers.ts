@@ -42,3 +42,54 @@ export function expectRegistrySourcedShares(chain: FairChainEntry[]): void {
 export function expectDefaultShares(chain: FairChainEntry[]): void {
   expect(findChainRole(chain, 'node')).toMatchObject({ did: 'NODE_PLACEHOLDER', share: 0.005 });
 }
+
+// ─── Generic route-test mock factories ─────────────────────────────────────
+// These four apps' getNodeSelf() call-site tests otherwise re-declare the
+// exact same mock plumbing (a silent logger, a passthrough media resolver,
+// the resolveActingDid identity-resolution rule, JSON response helpers, and
+// a drizzle insert().values().returning() chain) — sharing it here is what
+// keeps those test files from being near-identical copy-paste blocks.
+
+/** Factory for a `vi.mock('@imajin/logger', ...)` that swallows all log calls. */
+export function silentLoggerFactory() {
+  return { createLogger: () => ({ error: () => {}, info: () => {}, warn: () => {} }) };
+}
+
+/** Factory for a `vi.mock('@imajin/media', ...)` that returns refs unchanged. */
+export function passthroughMediaRefFactory() {
+  return { resolveMediaRef: (ref: string) => ref };
+}
+
+/** Shared `resolveActingDid` rule used by every `vi.mock('@imajin/auth', ...)` in these tests. */
+export function resolveActingDidMock(identity: { actingFor?: string; actingAs?: string | null; id: string }): string {
+  return identity.actingFor ?? identity.actingAs ?? identity.id;
+}
+
+/** Shared `jsonResponse`/`errorResponse` implementations for `vi.mock('@/lib/utils', ...)`. */
+export function jsonResponseMock(data: unknown, status = 200): Response {
+  return Response.json(data, { status });
+}
+export function errorResponseMock(error: string, status = 400): Response {
+  return Response.json({ error }, { status });
+}
+
+/** Builds a JSON POST/PATCH Request for a route test. */
+export function makeJsonRequest(url: string, method: string, body: Record<string, unknown>): Request {
+  return new Request(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// Note: a shared "createInsertChainMocks()" factory was considered here too,
+// but vi.hoisted() callbacks run before regular imports are live (Vitest
+// hoists vi.mock()/vi.hoisted() above the module's import statements), so a
+// helper imported from this file cannot be called from inside vi.hoisted().
+// Each call site still declares its own three-line insert-chain vi.fn()s;
+// only the (non-hoisted, lazily-invoked) piece below is shared.
+
+/** Resolves `.returning()` with whatever was last passed to `.values(...)`, as a single-row array. */
+export function echoLastInsertedValue(valuesMock: { mock: { calls: unknown[][] } }) {
+  return async () => [valuesMock.mock.calls.at(-1)?.[0]];
+}

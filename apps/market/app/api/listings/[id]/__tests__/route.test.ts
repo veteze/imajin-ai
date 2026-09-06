@@ -5,11 +5,26 @@
  * these exercise the getNodeSelf() → buildFairManifest() branches (#2000)
  * through the real PATCH handler and the real (unmocked) buildFairManifest,
  * specifically the price-change path that recalculates the .fair manifest.
+ *
+ * Shared mock plumbing and .fair chain fixtures/assertions live in
+ * packages/fair/src/test-helpers.ts — see that file for why.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  REGISTRY_NODE_SELF,
+  expectRegistrySourcedShares,
+  expectDefaultShares,
+  resolveActingDidMock,
+  passthroughMediaRefFactory,
+  jsonResponseMock,
+  errorResponseMock,
+  makeJsonRequest,
+} from '../../../../../../../packages/fair/src/test-helpers';
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
+// vi.hoisted() runs before regular imports are live, so its callback can
+// only reference other vi.hoisted()/vi.mock() values.
 const mocks = vi.hoisted(() => {
   const selectWhereMock = vi.fn();
   const selectFromMock = vi.fn(() => ({ where: selectWhereMock }));
@@ -33,10 +48,6 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock('@imajin/logger', () => ({
-  createLogger: vi.fn(() => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() })),
-}));
-
 vi.mock('@/db', () => ({
   db: { select: mocks.selectMock, update: mocks.updateMock },
   listings: { id: 'col_id' },
@@ -45,13 +56,10 @@ vi.mock('@/db', () => ({
 vi.mock('@imajin/auth', () => ({
   requireAuth: mocks.requireAuthMock,
   getSession: vi.fn().mockResolvedValue(null),
-  resolveActingDid: (identity: { actingFor?: string; actingAs?: string | null; id: string }) =>
-    identity.actingFor ?? identity.actingAs ?? identity.id,
+  resolveActingDid: resolveActingDidMock,
 }));
 
-vi.mock('@imajin/media', () => ({
-  resolveMediaRef: (ref: string) => ref,
-}));
+vi.mock('@imajin/media', () => passthroughMediaRefFactory());
 
 vi.mock('@imajin/db', () => ({
   getClient: () => mocks.sqlMock,
@@ -66,8 +74,8 @@ vi.mock('@imajin/bus', () => ({
 }));
 
 vi.mock('@/lib/utils', () => ({
-  jsonResponse: (data: unknown, status = 200) => Response.json(data, { status }),
-  errorResponse: (error: string, status = 400) => Response.json({ error }, { status }),
+  jsonResponse: jsonResponseMock,
+  errorResponse: errorResponseMock,
 }));
 
 // buildFairManifest (@imajin/fair) is intentionally NOT mocked.
@@ -75,18 +83,13 @@ vi.mock('@/lib/utils', () => ({
 // ─── Subject ────────────────────────────────────────────────────────────────
 
 import { PATCH } from '../route';
-import { REGISTRY_NODE_SELF, expectRegistrySourcedShares, expectDefaultShares } from '../../../../../../../packages/fair/src/test-helpers';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const ROUTE_PARAMS = { params: Promise.resolve({ id: 'lst_1' }) };
 
 function makeRequest(body: Record<string, unknown>): Parameters<typeof PATCH>[0] {
-  return new Request('https://market.test/api/listings/lst_1', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }) as Parameters<typeof PATCH>[0];
+  return makeJsonRequest('https://market.test/api/listings/lst_1', 'PATCH', body) as Parameters<typeof PATCH>[0];
 }
 
 const EXISTING_LISTING = {
@@ -105,10 +108,7 @@ describe('PATCH /api/listings/:id (#2000: node config sourced via getNodeSelf())
     mocks.sqlMock.mockReset().mockResolvedValue([]);
     mocks.publishMock.mockResolvedValue(undefined);
     mocks.selectWhereMock.mockReset().mockResolvedValue([EXISTING_LISTING]);
-    mocks.updateReturningMock.mockImplementation(async () => {
-      const setArg = mocks.updateSetMock.mock.calls.at(-1)?.[0];
-      return [setArg];
-    });
+    mocks.updateReturningMock.mockImplementation(async () => [mocks.updateSetMock.mock.calls.at(-1)?.[0]]);
     mocks.requireAuthMock.mockResolvedValue({
       identity: { id: 'did:imajin:seller', actingAs: null },
     });

@@ -4,11 +4,26 @@
  * See apps/coffee/app/api/pages/__tests__/route.test.ts for the rationale:
  * these exercise the getNodeSelf() → buildFairManifest() branches (#2000)
  * through the real POST handler and the real (unmocked) buildFairManifest.
+ *
+ * Shared mock plumbing and .fair chain fixtures/assertions live in
+ * packages/fair/src/test-helpers.ts — see that file for why.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  REGISTRY_NODE_SELF,
+  expectRegistrySourcedShares,
+  expectDefaultShares,
+  resolveActingDidMock,
+  jsonResponseMock,
+  errorResponseMock,
+  makeJsonRequest,
+} from '../../../../../../packages/fair/src/test-helpers';
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
+// vi.hoisted() runs before regular imports are live, so its callback can
+// only reference other vi.hoisted()/vi.mock() values — the shared
+// createInsertChainMocks() helper is used elsewhere but not here.
 const mocks = vi.hoisted(() => {
   const limitMock = vi.fn().mockResolvedValue([]);
   const whereMock = vi.fn(() => ({ limit: limitMock }));
@@ -41,8 +56,7 @@ vi.mock('@/db/schema', () => ({
 
 vi.mock('@imajin/auth', () => ({
   requireHardDID: mocks.requireHardDIDMock,
-  resolveActingDid: (identity: { actingFor?: string; actingAs?: string | null; id: string }) =>
-    identity.actingFor ?? identity.actingAs ?? identity.id,
+  resolveActingDid: resolveActingDidMock,
 }));
 
 vi.mock('@imajin/db', () => ({
@@ -56,8 +70,8 @@ vi.mock('@imajin/config', () => ({
 vi.mock('@/lib/utils', () => ({
   generateId: (prefix: string) => `${prefix}_test123`,
   slugify: (text: string) => text.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
-  jsonResponse: (data: unknown, status = 200) => Response.json(data, { status }),
-  errorResponse: (error: string, status = 400) => Response.json({ error }, { status }),
+  jsonResponse: jsonResponseMock,
+  errorResponse: errorResponseMock,
 }));
 
 // buildFairManifest (@imajin/fair) is intentionally NOT mocked.
@@ -65,16 +79,11 @@ vi.mock('@/lib/utils', () => ({
 // ─── Subject ────────────────────────────────────────────────────────────────
 
 import { POST } from '../route';
-import { REGISTRY_NODE_SELF, expectRegistrySourcedShares, expectDefaultShares } from '../../../../../../packages/fair/src/test-helpers';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function makeRequest(body: Record<string, unknown>): Parameters<typeof POST>[0] {
-  return new Request('https://learn.test/api/courses', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }) as Parameters<typeof POST>[0];
+  return makeJsonRequest('https://learn.test/api/courses', 'POST', body) as Parameters<typeof POST>[0];
 }
 
 const VALID_BODY = { title: 'Intro to Testing' };
