@@ -76,6 +76,14 @@ components:
         version: { type: string }
         health: { type: object }
         signature: { type: string }
+    NodeSelf:
+      type: object
+      required: [did, nodeOperatorDid, nodeFeeBps, buyerCreditBps]
+      properties:
+        did: { type: string, description: "This node's own DID (did:imajin:...)", example: "did:imajin:jin" }
+        nodeOperatorDid: { type: [string, "null"], description: "DID of the human/entity operating this node, if configured" }
+        nodeFeeBps: { type: [integer, "null"], description: "Node fee, in basis points, applied to .fair settlements on this node", example: 50 }
+        buyerCreditBps: { type: [integer, "null"], description: "Buyer credit, in basis points, applied to .fair settlements on this node", example: 25 }
     Error:
       type: object
       required: [error]
@@ -222,6 +230,35 @@ paths:
                   error: { type: string }
         "400":
           description: Missing buildHash
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/node/self:
+    get:
+      tags: [registry]
+      operationId: getNodeSelf
+      summary: >-
+        Public lookup for this node's own DID and minimal public config.
+        Single source of truth for the node DID lookup previously
+        re-implemented via raw `relay.relay_config` SQL in coffee, learn,
+        events, and market (#2000).
+      responses:
+        "200":
+          description: Node self metadata
+          headers:
+            Cache-Control:
+              schema: { type: string, example: "public, max-age=30" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NodeSelf" }
+              example:
+                did: "did:imajin:jin"
+                nodeOperatorDid: "did:imajin:operator"
+                nodeFeeBps: 50
+                buyerCreditBps: 25
+        "503":
+          description: Node identity not configured yet (relay_config singleton row missing and no RELAY_DID fallback)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

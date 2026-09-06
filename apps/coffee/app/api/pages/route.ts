@@ -4,6 +4,7 @@ const log = createLogger('coffee');
 import { db, coffeePages } from '@/db';
 import { requireAuth , resolveActingDid } from '@imajin/auth';
 import { getClient } from '@imajin/db';
+import { getNodeSelf } from '@imajin/config';
 import { buildFairManifest } from '@imajin/fair';
 import { jsonResponse, errorResponse, isValidHandle, generateId } from '@/lib/utils';
 
@@ -72,14 +73,9 @@ export async function POST(request: NextRequest) {
       return errorResponse('Handle is already taken', 409);
     }
 
-    // Load node config and optional scope config for fair manifest
+    // Load node config (via the registry, #2000) and optional scope config for fair manifest
     const rawSql = getClient();
-    const [relayRow] = await rawSql`
-      SELECT node_fee_bps, buyer_credit_bps, node_operator_did
-      FROM relay.relay_config
-      WHERE id = 'singleton'
-      LIMIT 1
-    `;
+    const nodeSelf = await getNodeSelf();
     const scopeDid = identity.actingAs || null;
     let scopeFeeBps: number | null = null;
     if (scopeDid) {
@@ -97,9 +93,9 @@ export async function POST(request: NextRequest) {
       contentType: 'coffee_page',
       scopeDid,
       scopeFeeBps,
-      nodeFeeBps: relayRow?.node_fee_bps ?? undefined,
-      buyerCreditBps: relayRow?.buyer_credit_bps ?? undefined,
-      nodeOperatorDid: relayRow?.node_operator_did ?? undefined,
+      nodeFeeBps: nodeSelf?.nodeFeeBps ?? undefined,
+      buyerCreditBps: nodeSelf?.buyerCreditBps ?? undefined,
+      nodeOperatorDid: nodeSelf?.nodeOperatorDid ?? undefined,
     });
 
     // Create page

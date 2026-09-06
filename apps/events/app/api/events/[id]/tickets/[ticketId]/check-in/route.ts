@@ -2,6 +2,7 @@
 import { createLogger } from '@imajin/logger';
 import { publish } from '@imajin/bus';
 import { requireAuth , resolveActingDid } from '@imajin/auth';
+import { getNodeSelf } from '@imajin/config';
 
 const log = createLogger('events');
 import { isEventOrganizer } from '@/src/lib/organizer';
@@ -12,13 +13,11 @@ const sql = getClient();
 let _nodeDid: string | undefined;
 async function getNodeDid(): Promise<string> {
   if (_nodeDid !== undefined) return _nodeDid;
-  try {
-    const [row] = await sql`SELECT imajin_did FROM relay.relay_config WHERE id = 'singleton' LIMIT 1`;
-    _nodeDid = (row?.imajin_did as string | null) || process.env.RELAY_DID || '';
-  } catch {
-    _nodeDid = process.env.RELAY_DID || '';
-  }
-  if (!_nodeDid) log.warn({}, '[check-in] No node DID found in relay.relay_config or RELAY_DID');
+  // Registry-backed lookup (#2000) — replaces the raw relay.relay_config SQL
+  // this app used to run directly against the kernel's DB.
+  const nodeSelf = await getNodeSelf();
+  _nodeDid = nodeSelf?.did || process.env.RELAY_DID || '';
+  if (!_nodeDid) log.warn({}, '[check-in] No node DID found via registry or RELAY_DID');
   return _nodeDid;
 }
 

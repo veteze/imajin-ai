@@ -32,6 +32,9 @@ export { apiFetch, apiUrl } from "./base-path";
 
 export { rateLimit, getClientIP } from "./rate-limit";
 
+export { getNodeSelf } from "./node-self";
+export type { NodeSelfInfo } from "./node-self";
+
 export {
   HANDLE_PATTERN,
   HANDLE_INPUT_PATTERN,

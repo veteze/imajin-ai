@@ -6,6 +6,7 @@ import { requireAuth, getSession , resolveActingDid } from '@imajin/auth';
 import { generateId, jsonResponse, errorResponse } from '@/lib/utils';
 import { resolveMediaRef } from '@imajin/media';
 import { getClient } from '@imajin/db';
+import { getNodeSelf } from '@imajin/config';
 import { buildFairManifest } from '@imajin/fair';
 import { publish } from '@imajin/bus';
 import { eq, ilike, and, desc, asc, sql, ne } from 'drizzle-orm';
@@ -71,14 +72,9 @@ export async function POST(request: NextRequest) {
 
     const did = resolveActingDid(identity);
 
-    // Load node config and optional scope config for fair manifest
+    // Load node config (via the registry, #2000) and optional scope config for fair manifest
     const rawSql = getClient();
-    const [relayRow] = await rawSql`
-      SELECT node_fee_bps, buyer_credit_bps, node_operator_did
-      FROM relay.relay_config
-      WHERE id = 'singleton'
-      LIMIT 1
-    `;
+    const nodeSelf = await getNodeSelf();
     const scopeDid = identity.actingAs || null;
     let scopeFeeBps: number | null = null;
     if (scopeDid) {
@@ -97,9 +93,9 @@ export async function POST(request: NextRequest) {
       contentType: 'listing',
       scopeDid,
       scopeFeeBps,
-      nodeFeeBps: relayRow?.node_fee_bps ?? undefined,
-      buyerCreditBps: relayRow?.buyer_credit_bps ?? undefined,
-      nodeOperatorDid: relayRow?.node_operator_did ?? undefined,
+      nodeFeeBps: nodeSelf?.nodeFeeBps ?? undefined,
+      buyerCreditBps: nodeSelf?.buyerCreditBps ?? undefined,
+      nodeOperatorDid: nodeSelf?.nodeOperatorDid ?? undefined,
     });
 
     const [listing] = await db.insert(listings).values({

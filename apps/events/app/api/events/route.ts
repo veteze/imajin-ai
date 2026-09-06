@@ -3,7 +3,7 @@ import { withLogger } from '@imajin/logger';
 import { publish } from '@imajin/bus';
 import { db, events, ticketTypes } from '@/src/db';
 import { requireHardDID, requireAppAuth, resolveActingDid, type Identity } from '@imajin/auth';
-import { corsHeaders } from '@imajin/config';
+import { corsHeaders, getNodeSelf } from '@imajin/config';
 import { getClient } from '@imajin/db';
 import { buildFairManifest } from '@imajin/fair';
 import { and, asc, desc, eq, gt } from 'drizzle-orm';
@@ -114,14 +114,9 @@ export const POST = withLogger('events', async (request, { log, correlationId })
     const regData = await regRes.json();
     const eventDid = regData.did;
 
-    // Load node config and optional scope config for fair manifest
+    // Load node config (via the registry, #2000) and optional scope config for fair manifest
     const sql = getClient();
-    const [relayRow] = await sql`
-      SELECT node_fee_bps, buyer_credit_bps, node_operator_did
-      FROM relay.relay_config
-      WHERE id = 'singleton'
-      LIMIT 1
-    `;
+    const nodeSelf = await getNodeSelf();
     const scopeDid = identity.actingAs || null;
     let scopeFeeBps: number | null = null;
     if (scopeDid) {
@@ -141,9 +136,9 @@ export const POST = withLogger('events', async (request, { log, correlationId })
       contentType: 'event',
       scopeDid,
       scopeFeeBps,
-      nodeFeeBps: relayRow?.node_fee_bps ?? undefined,
-      buyerCreditBps: relayRow?.buyer_credit_bps ?? undefined,
-      nodeOperatorDid: relayRow?.node_operator_did ?? undefined,
+      nodeFeeBps: nodeSelf?.nodeFeeBps ?? undefined,
+      buyerCreditBps: nodeSelf?.buyerCreditBps ?? undefined,
+      nodeOperatorDid: nodeSelf?.nodeOperatorDid ?? undefined,
     });
 
     // Create event
