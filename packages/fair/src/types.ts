@@ -80,10 +80,16 @@ export interface FairManifestV1_0 {
 // .fair v1.1 types (new)
 // ============================================================================
 
-export interface Money {
-  amount: number; // non-negative integer, minor units (cents)
-  currency: string; // ISO 4217 3-letter uppercase or 'MJNX'
-}
+// Money used to be defined here directly. It now lives in `@imajin/money`
+// (#1950) — re-exported rather than duplicated so there is exactly one
+// definition. The shape is unchanged (`{ amount: number, currency: string }`,
+// non-negative integer minor units for this package's own purposes), so
+// every existing object-literal call site below still type-checks as-is.
+// (`import type` + `export type` rather than a single `export type {...}
+// from ...`, since the interfaces further down this file reference `Money`
+// directly — a bare re-export doesn't introduce a local binding.)
+import type { Money } from '@imajin/money';
+export type { Money };
 
 export interface DidShareEntry {
   did?: string;
