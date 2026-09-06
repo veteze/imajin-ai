@@ -7,6 +7,7 @@ import { jsonResponse, errorResponse } from '@/lib/utils';
 import { resolveMediaRef } from '@imajin/media';
 import { buildFairManifest } from '@imajin/fair';
 import { getClient } from '@imajin/db';
+import { getNodeSelf } from '@imajin/config';
 import { publish } from '@imajin/bus';
 import { eq } from 'drizzle-orm';
 
@@ -145,12 +146,7 @@ export async function PATCH(request: NextRequest, props: { params: Promise<{ id:
     if (priceChanged || tierChanged || sellerDidChanged) {
       try {
         const rawSql = getClient();
-        const [relayRow] = await rawSql`
-          SELECT node_fee_bps, buyer_credit_bps, node_operator_did
-          FROM relay.relay_config
-          WHERE id = 'singleton'
-          LIMIT 1
-        `;
+        const nodeSelf = await getNodeSelf();
         const scopeDid = listing.sellerDid === currentDid  ? (identity.actingAs || null) : null;
         let scopeFeeBps: number | null = null;
         if (scopeDid) {
@@ -168,9 +164,9 @@ export async function PATCH(request: NextRequest, props: { params: Promise<{ id:
           contentType: 'listing',
           scopeDid,
           scopeFeeBps,
-          nodeFeeBps: relayRow?.node_fee_bps ?? undefined,
-          buyerCreditBps: relayRow?.buyer_credit_bps ?? undefined,
-          nodeOperatorDid: relayRow?.node_operator_did ?? undefined,
+          nodeFeeBps: nodeSelf?.nodeFeeBps ?? undefined,
+          buyerCreditBps: nodeSelf?.buyerCreditBps ?? undefined,
+          nodeOperatorDid: nodeSelf?.nodeOperatorDid ?? undefined,
         });
       } catch (manifestErr) {
         log.warn({ err: String(manifestErr) }, 'Failed to recalculate .fair manifest (non-fatal)');
