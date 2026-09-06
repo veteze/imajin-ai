@@ -19,7 +19,7 @@ Not every item applies to every PR. Scan the categories — check only what's re
 
 ## Cross-Service
 - [ ] `.env.example` updated in every affected app
-- [ ] `AUTH_INTERNAL_API_KEY` added if new service calls auth internally
+- [ ] `ATTESTATION_INTERNAL_API_KEY` (attestation forwarding) and/or `AUTH_INTERNAL_API_KEY` (verify-delegation/grants-introspect) added if new service calls auth internally
 - [ ] Service URLs added to `.env.local` on dev + prod for any new service-to-service calls
 - [ ] `docs/ENVIRONMENTS.md` updated if new port/domain/schema
 

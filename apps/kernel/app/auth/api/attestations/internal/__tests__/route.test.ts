@@ -173,6 +173,26 @@ describe('attestation.created payload (internal route)', () => {
     expect(res.status).toBe(401);
     expect(h.mockPublish).not.toHaveBeenCalled();
   });
+
+  // Regression guard for #2037: emit-attestation.ts used to send
+  // AUTH_INTERNAL_API_KEY, which this route never checked, so every
+  // mechanical attestation forward was silently rejected. This route must
+  // keep checking ATTESTATION_INTERNAL_API_KEY exclusively.
+  it('rejects a caller presenting AUTH_INTERNAL_API_KEY\'s value instead of ATTESTATION_INTERNAL_API_KEY\'s (#2037)', async () => {
+    process.env.AUTH_INTERNAL_API_KEY = 'a-different-legacy-key';
+
+    const res = await POST(
+      makeReq(
+        { issuer_did: ISSUER, subject_did: SUBJECT, type: 'identity.created' },
+        { apiKey: process.env.AUTH_INTERNAL_API_KEY },
+      ),
+    );
+
+    expect(res.status).toBe(401);
+    expect(h.mockPublish).not.toHaveBeenCalled();
+
+    delete process.env.AUTH_INTERNAL_API_KEY;
+  });
 });
 
 // #1895 / #1897 — RFC #1881 revocation finding: this internal route shares
