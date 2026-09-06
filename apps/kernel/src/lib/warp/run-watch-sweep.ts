@@ -122,6 +122,14 @@ export interface SweepOutcome {
   stillInFlight: number;
   /** Past `SWEEP_LOOKBACK_MS` with still no terminal state — published `warp.run.timeout` (#2032). */
   timedOut: number;
+  /**
+   * A terminal/timeout publish was skipped because the in-request watch (or an
+   * overlapping sweep tick) already published this exact segment's outcome
+   * between this tick listing its candidates and this candidate's own read
+   * completing — see {@link hasTerminalEventForSegment}. Counted separately
+   * from `completed`/`failed`/`timedOut` because nothing was published here.
+   */
+  skippedRace: number;
   /** Reads or publishes that failed; logged individually, never fatal to the sweep. */
   errors: number;
 }
@@ -134,6 +142,7 @@ function emptyOutcome(): SweepOutcome {
     blockedNotified: 0,
     stillInFlight: 0,
     timedOut: 0,
+    skippedRace: 0,
     errors: 0,
   };
 }
@@ -259,6 +268,40 @@ function resumeContextFor(candidate: InFlightRun): ResumeSegmentContext | undefi
 }
 
 /**
+ * Whether a terminal event for `runId`'s *current* segment has already been
+ * published at or after `activityAt` — i.e. since this segment started.
+ *
+ * Closes a real race between this sweep and the in-request watch
+ * (`watchRun`, `dispatch.ts`): both read `getAgentRun` independently and
+ * neither previously checked whether the other had already published before
+ * calling `publishTerminalRunOutcome`/`publishTimeoutRunOutcome`. A run that
+ * survives past one sweep tick while still being watched in-request (common
+ * for anything that takes more than a few minutes) could have both the watch
+ * and a sweep tick observe the same terminal state within moments of each
+ * other and each publish their own `warp.run.completed`/`.failed`/`.timeout`
+ * — a real duplicate notification and a real duplicate agent wake downstream
+ * (see docs/warp-notification-chain.md, "Incidents 2026-09-05", (c)).
+ *
+ * `activityAt` (not the sweep tick's own start time) is the right lower bound
+ * because it is what identifies *this* segment: an older segment's terminal
+ * row must never block a resumed segment's own completion (that was the
+ * #2032 bug), so only a terminal row at-or-after the current segment's own
+ * activity counts as "already handled".
+ */
+async function hasTerminalEventForSegment(runId: string, activityAt: Date): Promise<boolean> {
+  const sql = getClient();
+  const rows = await sql`
+    SELECT 1
+    FROM kernel.event_subscription_log
+    WHERE event_type IN ('warp.run.completed', 'warp.run.failed', 'warp.run.timeout')
+      AND payload->>'runId' = ${runId}
+      AND occurred_at >= ${activityAt.toISOString()}
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
+/**
  * Read `candidate` once and publish whatever the read reveals. Never throws.
  *
  * `lookbackMs` governs the genuinely-timed-out decision (#2032): a candidate
@@ -266,11 +309,20 @@ function resumeContextFor(candidate: InFlightRun): ResumeSegmentContext | undefi
  * other (a stuck run that actually finished must still be reported as such),
  * but if that read is still neither terminal nor BLOCKED, this publishes
  * `warp.run.timeout` instead of silently counting it as in-flight forever.
+ *
+ * Before either terminal-shaped publish, {@link hasTerminalEventForSegment}
+ * re-checks the durable log so a candidate that the in-request watch already
+ * finalised while this read was in flight is skipped rather than
+ * double-published (see that function's doc for the race this closes).
  */
 async function checkOneRun(candidate: InFlightRun, outcome: SweepOutcome, lookbackMs: number): Promise<void> {
   const run = await getAgentRun(candidate.principalDid, candidate.runId);
 
   if (isTerminalRunState(run.state)) {
+    if (await hasTerminalEventForSegment(candidate.runId, candidate.activityAt)) {
+      outcome.skippedRace += 1;
+      return;
+    }
     await publishTerminalRunOutcome(candidate.principalDid, run, run.state, resumeContextFor(candidate));
     if (run.state === 'FAILED') outcome.failed += 1;
     else outcome.completed += 1;
@@ -289,6 +341,10 @@ async function checkOneRun(candidate: InFlightRun, outcome: SweepOutcome, lookba
 
   const ageMs = Date.now() - candidate.activityAt.getTime();
   if (ageMs > lookbackMs) {
+    if (await hasTerminalEventForSegment(candidate.runId, candidate.activityAt)) {
+      outcome.skippedRace += 1;
+      return;
+    }
     await publishTimeoutRunOutcome(candidate.principalDid, candidate.runId, run.state ?? 'UNKNOWN');
     outcome.timedOut += 1;
     return;

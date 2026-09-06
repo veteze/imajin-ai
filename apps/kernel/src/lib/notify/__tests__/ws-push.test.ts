@@ -8,8 +8,12 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+const { logMock } = vi.hoisted(() => ({
+  logMock: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+}));
+
 vi.mock('@imajin/logger', () => ({
-  createLogger: () => ({ error: vi.fn(), info: vi.fn(), warn: vi.fn() }),
+  createLogger: () => logMock,
 }));
 
 const RECIPIENT = 'did:imajin:veteze';
@@ -45,6 +49,9 @@ const originalEnv = { ...process.env };
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  logMock.error.mockReset();
+  logMock.info.mockReset();
+  logMock.warn.mockReset();
 });
 
 afterEach(() => {
@@ -132,6 +139,32 @@ describe('pushNotificationToDid', () => {
     const { pushNotificationToDid } = await loadModule({ internalKey: INTERNAL_KEY });
 
     expect(await pushNotificationToDid(RECIPIENT, FRAME)).toBe(false);
+  });
+
+  it('warns when nobody was connected, instead of staying silent (2026-09-05 incident)', async () => {
+    // Before the fix this branch (res.ok but delivered: false) logged nothing at
+    // all, unlike the error branches below — a genuinely missed live push for a
+    // completed run left no trace anywhere of why the owner never got pinged.
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ delivered: false }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { pushNotificationToDid } = await loadModule({ internalKey: INTERNAL_KEY });
+    await pushNotificationToDid(RECIPIENT, FRAME);
+
+    expect(logMock.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ id: FRAME.id, recipientDid: RECIPIENT }),
+      expect.stringContaining('no connected socket'),
+    );
+  });
+
+  it('does not warn when the push actually reached a socket', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ delivered: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { pushNotificationToDid } = await loadModule({ internalKey: INTERNAL_KEY });
+    await pushNotificationToDid(RECIPIENT, FRAME);
+
+    expect(logMock.warn).not.toHaveBeenCalled();
   });
 
   it('skips the push entirely when no internal key is configured', async () => {
