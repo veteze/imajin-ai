@@ -61,14 +61,14 @@ The protocol doesn't require the token. The token requires the protocol.
 
 The matrix is the substrate's **vocabulary** — the verbs any intent resolves to, the same whether the actor is a person, a family, or a community. The agent doesn't invent capabilities; it composes these cells on your behalf. Every problem the protocol solves is a cell; every service in this repo implements cells.
 
-Revocation is the sixth primitive but doesn't cross the matrix the way the other five do — its force points at *other* sentences in the record (it acts on validity, not on the world), so it's listed here rather than gridded into a cell per scope.
+Revocation's force points at *other* sentences in the record (it acts on validity, not on the world) rather than at the world the way Attestation, Communication, Attribution, Settlement, and Discovery do. It is still gridded into a cell per scope below — each cell is marked **named** rather than described: the canonical seat is set, the build waits for the use case that forces it.
 
-|  | Attestation | Communication | Attribution | Settlement | Discovery |
-|--|-------------|---------------|-------------|------------|-----------|
-| **Actor** | Credentials, reputation | Direct messaging | Personal .fair manifests | Payments, tips | Profile, presence |
-| **Family** | Custodial consent | Shared channels | Shared attribution | Shared resources | Family node |
-| **Community** | Governance weight | Scoped forums | Collective .fair | Quorum settlement | Federated registry |
-| **Business** | Reviews, compliance | Commercial messaging | Product attribution | Transaction fees | Marketplace listing |
+|  | Attestation | Communication | Attribution | Settlement | Discovery | Revocation |
+|--|-------------|---------------|-------------|------------|-----------|------------|
+| **Actor** | Credentials, reputation | Direct messaging | Personal .fair manifests | Payments, tips | Profile, presence | Named — canonical seat |
+| **Family** | Custodial consent | Shared channels | Shared attribution | Shared resources | Family node | Named — canonical seat |
+| **Community** | Governance weight | Scoped forums | Collective .fair | Quorum settlement | Federated registry | Named — canonical seat |
+| **Business** | Reviews, compliance | Commercial messaging | Product attribution | Transaction fees | Marketplace listing | Named — canonical seat |
 
 **Revocation** — the option to leave. Withdraw → soft (tombstone) → hard (destroy hash/key, keep the tombstone): the record remembers *that*, destruction erases *what*. Propagation is part of the primitive; revocation without propagation is theater. Named ahead of the lived experience — the seat is canon, the build waits for the use case that forces it.
 

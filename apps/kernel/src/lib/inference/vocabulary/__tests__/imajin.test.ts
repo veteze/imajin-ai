@@ -18,7 +18,7 @@ describe('imajinVocabulary.resolveConsentTier', () => {
     ['discovery.context', 'silent'],
     ['message.connection', 'deliberate'],
     ['asset.share', 'deliberate'],
-  ])('classifies the original five-primitive intent %s as %s', (intentType, tier) => {
+  ])('classifies the pre-Revocation intent %s as %s', (intentType, tier) => {
     expect(imajinVocabulary.resolveConsentTier(intentType)).toBe(tier);
   });
 
