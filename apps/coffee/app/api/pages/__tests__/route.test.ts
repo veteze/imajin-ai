@@ -11,17 +11,16 @@
  * Shared mock plumbing and .fair chain fixtures/assertions live in
  * packages/fair/src/test-helpers.ts — see that file for why.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, vi, beforeEach } from 'vitest';
 import {
-  REGISTRY_NODE_SELF,
-  expectRegistrySourcedShares,
-  expectDefaultShares,
   silentLoggerFactory,
   resolveActingDidMock,
   jsonResponseMock,
   errorResponseMock,
   makeJsonRequest,
   echoLastInsertedValue,
+  itDrivesFairManifestFromNodeSelf,
+  type FairChainEntry,
 } from '../../../../../../packages/fair/src/test-helpers';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────
@@ -105,24 +104,9 @@ describe('POST /api/pages (#2000: node config sourced via getNodeSelf())', () =>
     });
   });
 
-  it('uses the registry-sourced fee config in the persisted .fair manifest', async () => {
-    mocks.getNodeSelfMock.mockResolvedValue(REGISTRY_NODE_SELF);
-
-    const res = await POST(makeRequest(VALID_BODY));
-    expect(res.status).toBe(201);
-    expect(mocks.getNodeSelfMock).toHaveBeenCalled();
-
-    const body = await res.json();
-    expectRegistrySourcedShares(body.fairManifest.chain);
-  });
-
-  it('falls back to .fair defaults when the registry is unavailable (getNodeSelf() → null)', async () => {
-    mocks.getNodeSelfMock.mockResolvedValue(null);
-
-    const res = await POST(makeRequest(VALID_BODY));
-    expect(res.status).toBe(201);
-
-    const body = await res.json();
-    expectDefaultShares(body.fairManifest.chain);
+  itDrivesFairManifestFromNodeSelf({
+    getNodeSelfMock: mocks.getNodeSelfMock,
+    callRoute: () => POST(makeRequest(VALID_BODY)),
+    getChain: (body) => (body.fairManifest as { chain: FairChainEntry[] }).chain,
   });
 });

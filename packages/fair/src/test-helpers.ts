@@ -12,7 +12,7 @@
  * keeps those four test suites from reading as near-identical copy-pasted
  * blocks.
  */
-import { expect } from 'vitest';
+import { expect, it } from 'vitest';
 
 export interface FairChainEntry {
   did: string;
@@ -92,4 +92,43 @@ export function makeJsonRequest(url: string, method: string, body: Record<string
 /** Resolves `.returning()` with whatever was last passed to `.values(...)`, as a single-row array. */
 export function echoLastInsertedValue(valuesMock: { mock: { calls: unknown[][] } }) {
   return async () => [valuesMock.mock.calls.at(-1)?.[0]];
+}
+
+interface MockLike {
+  mockResolvedValue: (value: unknown) => unknown;
+}
+
+/**
+ * Registers the two `it(...)` cases every getNodeSelf() call-site test needs
+ * — success (registry-sourced shares) and fallback (registry unavailable) —
+ * against an already-configured `beforeEach`. Callers still own their own
+ * mock setup; this only removes the literal, byte-for-byte identical `it`
+ * bodies that would otherwise appear in every call site's test file.
+ */
+export function itDrivesFairManifestFromNodeSelf(config: {
+  getNodeSelfMock: MockLike;
+  callRoute: () => Promise<Response>;
+  getChain: (body: Record<string, unknown>) => FairChainEntry[];
+  successStatus?: number;
+}): void {
+  const successStatus = config.successStatus ?? 201;
+
+  it('uses the registry-sourced fee config in the persisted .fair manifest', async () => {
+    config.getNodeSelfMock.mockResolvedValue(REGISTRY_NODE_SELF);
+
+    const res = await config.callRoute();
+    expect(res.status).toBe(successStatus);
+    expect(config.getNodeSelfMock).toHaveBeenCalled();
+
+    expectRegistrySourcedShares(config.getChain(await res.json()));
+  });
+
+  it('falls back to .fair defaults when the registry is unavailable (getNodeSelf() → null)', async () => {
+    config.getNodeSelfMock.mockResolvedValue(null);
+
+    const res = await config.callRoute();
+    expect(res.status).toBe(successStatus);
+
+    expectDefaultShares(config.getChain(await res.json()));
+  });
 }
